@@ -7,7 +7,10 @@ edition = "2021"
 
 [dependencies]
 base64 = "0.13.0"
-envy = "0.4.2"
+either = "1.6.1"
+figment = { version = "0.10.6", features = ["toml", "env"] }
+rusqlite = "0.27.0"
+serde = { version = "~1.0.136", features = ["derive"] }
 tokio = { version = "~1.17.0", features = ["full"] }
-validators = "0.24.1"
+validators = { version = "~0.24.1", features = ["url-dep"] }
 warp = "0.3.2"
