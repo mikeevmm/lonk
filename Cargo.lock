@@ -259,7 +259,7 @@ dependencies = [
  "atomic",
  "pear",
  "serde",
- "toml",
+ "serde_json",
  "uncased",
  "version_check",
 ]
@@ -584,8 +584,8 @@ dependencies = [
  "figment",
  "redis",
  "serde",
+ "serde_json",
  "tokio",
- "toml",
  "validators",
  "warp",
 ]
@@ -1294,15 +1294,6 @@ dependencies = [
  "log",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "toml"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a31142970826733df8241ef35dc040ef98c679ab14d7c3e54d827099b3acecaa"
-dependencies = [
- "serde",
 ]
 
 [[package]]

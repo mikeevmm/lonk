@@ -1,11 +1,8 @@
 use argh::FromArgs;
-use figment::{
-    providers::{Format, Toml},
-    Figment,
-};
+use figment::{providers::Format, Figment};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, path::PathBuf, str::FromStr, sync::Arc};
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc::UnboundedSender;
 use validators::prelude::*;
 use warp::{filters::BoxedFilter, hyper::StatusCode, Filter};
 
@@ -19,7 +16,7 @@ macro_rules! unwrap_or_unwrap_err {
 }
 
 #[derive(Serialize, Deserialize, Debug, Validator, Clone)]
-#[validator(domain(ipv4(Allow), local(NotAllow), at_least_two_labels(Allow), port(Allow)))]
+#[validator(domain(ipv4(Allow), local(Allow), at_least_two_labels(Allow), port(Allow)))]
 struct Url {
     domain: String,
     port: Option<u16>,
@@ -27,12 +24,14 @@ struct Url {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct DbConfig {
-    pub address: Url,
+    pub address: String,
 }
 
 impl Default for DbConfig {
     fn default() -> Self {
-        Self { address: Url::parse_str("redis://127.0.0.1/").unwrap() }
+        Self {
+            address: "redis://127.0.0.1".to_string(),
+        }
     }
 }
 
@@ -187,9 +186,9 @@ fn shorten(
 #[tokio::main]
 async fn serve() {
     // Read configuration
-    let config_file = std::env::var("LONK_CONFIG").unwrap_or("lonk.toml".to_string());
+    let config_file = std::env::var("LONK_CONFIG").unwrap_or("lonk.json".to_string());
     let config: Config = Figment::new()
-        .merge(Toml::file(&config_file))
+        .merge(figment::providers::Json::file(&config_file))
         .extract()
         .expect("Could not parse configuration file.");
 
@@ -198,12 +197,7 @@ async fn serve() {
 
     // Initialize database
     let db = {
-        let client = if let Some(port) = config.db.address.port {
-            redis::Client::open((config.db.address.domain, port))
-        } else {
-            redis::Client::open(config.db.address.domain)
-        };
-        let client = client.expect("Error opening Redis database.");
+        let client = redis::Client::open(config.db.address).expect("Error opening Redis database.");
         //let conn = Connection::open(config.db_location).expect("Could not open database.");
         Arc::new(SlugDatabase::from_client(client))
     };
@@ -245,8 +239,8 @@ fn main() {
     if run.print_default_config {
         println!(
             "{}",
-            toml::to_string(&Config::default())
-                .expect("Default configuration should always be TOML serializable")
+            serde_json::to_string_pretty(&Config::default())
+                .expect("Default configuration should always be JSON serializable")
         );
     } else {
         serve();
