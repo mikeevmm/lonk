@@ -1,0 +1,17 @@
+version: '3.9'
+services:
+  lonk:
+    build: .
+    environment:
+      - PROFILE: release
+      - LONK_CONFIG: /data/config.toml
+    volumes:
+      - ./data:/data
+  redis:
+    image: 'redis:alpine'
+    command: redis-server --save 20 1 --loglevel warning
+    volumes:
+      - redis:/data
+volumes:
+  redis:
+    driver: local

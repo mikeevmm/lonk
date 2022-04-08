@@ -1,11 +1,13 @@
+use argh::FromArgs;
 use figment::{
     providers::{Format, Toml},
     Figment,
 };
-use rusqlite::Connection;
-use std::{collections::BTreeSet, str::FromStr, sync::Arc};
+use serde::{Deserialize, Serialize};
+use std::{collections::BTreeSet, path::PathBuf, str::FromStr, sync::Arc};
+use tokio::sync::mpsc::{self, UnboundedSender};
 use validators::prelude::*;
-use warp::{hyper::StatusCode, Filter};
+use warp::{filters::BoxedFilter, hyper::StatusCode, Filter};
 
 macro_rules! unwrap_or_unwrap_err {
     ($x:expr) => {
@@ -16,62 +18,73 @@ macro_rules! unwrap_or_unwrap_err {
     };
 }
 
-mod config {
-    use serde::{Deserialize, Serialize};
-    use std::{path::PathBuf, str::FromStr};
-    use warp::{filters::BoxedFilter, Filter};
+#[derive(Serialize, Deserialize, Debug, Validator, Clone)]
+#[validator(domain(ipv4(Allow), local(NotAllow), at_least_two_labels(Allow), port(Allow)))]
+struct Url {
+    domain: String,
+    port: Option<u16>,
+}
 
-    #[derive(Deserialize, Serialize, Debug, Clone)]
-    pub struct Config {
-        pub db_location: PathBuf,
-        pub slug_rules: SlugRules,
-        pub serve_rules: ServeRules,
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct DbConfig {
+    pub address: Url,
+}
+
+impl Default for DbConfig {
+    fn default() -> Self {
+        Self { address: Url::parse_str("redis://127.0.0.1/").unwrap() }
     }
+}
 
-    #[derive(Deserialize, Serialize, Debug, Clone)]
-    pub struct SlugRules {
-        pub length: usize,
-        pub chars: String,
-    }
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct SlugRules {
+    pub length: usize,
+    pub chars: String,
+}
 
-    #[derive(Deserialize, Serialize, Debug, Clone)]
-    pub enum ServeRules {
-        File(PathBuf),
-        Dir(PathBuf),
-    }
-
-    impl ServeRules {
-        pub fn to_filter(&self) -> BoxedFilter<(warp::fs::File,)> {
-            match self {
-                ServeRules::File(file) => warp::fs::file(file.clone()).boxed(),
-                ServeRules::Dir(dir) => warp::fs::dir(dir.clone()).boxed(),
-            }
+impl Default for SlugRules {
+    fn default() -> Self {
+        Self {
+            length: 5,
+            chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-".to_string(),
         }
     }
+}
 
-    impl Default for SlugRules {
-        fn default() -> Self {
-            Self {
-                length: 5,
-                chars: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
-                    .to_string(),
-            }
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub enum ServeRules {
+    File(PathBuf),
+    Dir(PathBuf),
+}
+
+impl ServeRules {
+    pub fn to_filter(&self) -> BoxedFilter<(warp::fs::File,)> {
+        match self {
+            ServeRules::File(file) => warp::fs::file(file.clone()).boxed(),
+            ServeRules::Dir(dir) => warp::fs::dir(dir.clone()).boxed(),
         }
     }
+}
 
-    impl Default for ServeRules {
-        fn default() -> Self {
-            ServeRules::Dir(PathBuf::from_str("/etc/lonk/served").unwrap())
-        }
+impl Default for ServeRules {
+    fn default() -> Self {
+        ServeRules::Dir(PathBuf::from_str("/etc/lonk/served").unwrap())
     }
+}
 
-    impl Default for Config {
-        fn default() -> Self {
-            Self {
-                db_location: PathBuf::from_str("/etc/lonk/data.db").unwrap(),
-                slug_rules: Default::default(),
-                serve_rules: Default::default(),
-            }
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct Config {
+    pub db: DbConfig,
+    pub slug_rules: SlugRules,
+    pub serve_rules: ServeRules,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            db: Default::default(),
+            slug_rules: Default::default(),
+            serve_rules: Default::default(),
         }
     }
 }
@@ -79,13 +92,6 @@ mod config {
 #[derive(Debug, Validator)]
 #[validator(base64_url(padding(NotAllow)))]
 struct Base64WithoutPaddingUrl(String);
-
-#[derive(Validator)]
-#[validator(domain(ipv4(Allow), local(Allow), at_least_two_labels(Allow), port(Allow)))]
-struct Url {
-    domain: String,
-    port: Option<u16>,
-}
 
 impl FromStr for Base64WithoutPaddingUrl {
     type Err = <Self as ValidateString>::Error;
@@ -95,17 +101,25 @@ impl FromStr for Base64WithoutPaddingUrl {
     }
 }
 
-struct SlugDatabase(rusqlite::Connection);
+#[derive(Debug)]
+struct SlugDatabase {
+    tx: UnboundedSender<SlugDbMessage>,
+}
+
+#[derive(Debug)]
+enum SlugDbMessage {
+    Add(Slug, Url),
+}
 
 impl SlugDatabase {
-    fn from_connection(connection: rusqlite::Connection) -> Self {
-        // TODO: Check that the database has the necessary format
-
-        SlugDatabase(connection)
+    fn from_client(client: redis::Client) -> Self {
+        todo!()
     }
 
-    fn insert_slug(slug: Slug, url: Url) -> Result<(), ()> {
-        todo!();
+    fn insert_slug(&self, slug: Slug, url: Url) -> Result<(), ()> {
+        self.tx
+            .send(SlugDbMessage::Add(slug, url))
+            .expect("Could not send message.");
         Ok(())
     }
 }
@@ -115,6 +129,7 @@ struct SlugFactory {
     slug_chars: BTreeSet<char>,
 }
 
+#[derive(Debug)]
 struct Slug(String);
 
 enum InvalidSlug {
@@ -123,7 +138,7 @@ enum InvalidSlug {
 }
 
 impl SlugFactory {
-    fn from_rules(rules: config::SlugRules) -> Self {
+    fn from_rules(rules: SlugRules) -> Self {
         let mut slug_chars = BTreeSet::<char>::new();
         slug_chars.extend(rules.chars.chars());
 
@@ -152,7 +167,11 @@ impl SlugFactory {
     }
 }
 
-fn shorten<'s>(slug_factory: &SlugFactory, db: SlugDatabase, b64url: &'s str) -> Result<StatusCode, StatusCode> {
+fn shorten(
+    slug_factory: &SlugFactory,
+    db: &SlugDatabase,
+    b64url: &str,
+) -> Result<StatusCode, StatusCode> {
     let url = {
         let raw = base64::decode_config(b64url, base64::URL_SAFE_NO_PAD)
             .map_err(|_| warp::http::StatusCode::BAD_REQUEST)?;
@@ -166,10 +185,10 @@ fn shorten<'s>(slug_factory: &SlugFactory, db: SlugDatabase, b64url: &'s str) ->
 }
 
 #[tokio::main]
-async fn main() {
+async fn serve() {
     // Read configuration
     let config_file = std::env::var("LONK_CONFIG").unwrap_or("lonk.toml".to_string());
-    let config: config::Config = Figment::new()
+    let config: Config = Figment::new()
         .merge(Toml::file(&config_file))
         .extract()
         .expect("Could not parse configuration file.");
@@ -178,7 +197,16 @@ async fn main() {
     let slug_factory = Arc::new(SlugFactory::from_rules(config.slug_rules));
 
     // Initialize database
-    let db = Connection::open(config.db_location);
+    let db = {
+        let client = if let Some(port) = config.db.address.port {
+            redis::Client::open((config.db.address.domain, port))
+        } else {
+            redis::Client::open(config.db.address.domain)
+        };
+        let client = client.expect("Error opening Redis database.");
+        //let conn = Connection::open(config.db_location).expect("Could not open database.");
+        Arc::new(SlugDatabase::from_client(client))
+    };
 
     // GET /
     let homepage = warp::path::end().and(config.serve_rules.to_filter());
@@ -188,7 +216,7 @@ async fn main() {
         move |link: Base64WithoutPaddingUrl| {
             warp::reply::with_status(
                 warp::reply(),
-                unwrap_or_unwrap_err!(shorten(&slug_factory, &link.0)),
+                unwrap_or_unwrap_err!(shorten(&slug_factory, &db, &link.0)),
             )
         }
     });
@@ -201,4 +229,26 @@ async fn main() {
     let routes = warp::get().and(homepage.or(shorten).or(link));
 
     warp::serve(routes).run(([127, 0, 0, 1], 8892)).await;
+}
+
+#[derive(FromArgs, PartialEq, Debug)]
+/// Start lonk.
+struct Run {
+    /// write a default configuration to stdout and quit
+    #[argh(switch)]
+    print_default_config: bool,
+}
+
+fn main() {
+    let run = argh::from_env::<Run>();
+
+    if run.print_default_config {
+        println!(
+            "{}",
+            toml::to_string(&Config::default())
+                .expect("Default configuration should always be TOML serializable")
+        );
+    } else {
+        serve();
+    }
 }
