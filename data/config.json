@@ -1,12 +1,12 @@
 {
   "db": {
-    "address": "redis://127.0.0.1"
+    "address": "redis://db"
   },
   "slug_rules": {
     "length": 5,
     "chars": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
   },
   "serve_rules": {
-    "Dir": "/etc/lonk/served"
+    "Dir": "/data/served"
   }
 }

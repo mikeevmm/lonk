@@ -8,7 +8,7 @@ WORKDIR lonk
 COPY ./Cargo.lock ./Cargo.lock
 COPY ./Cargo.toml ./Cargo.toml
 
-RUN cargo build --release
+RUN cargo build
 RUN src/*.rs
 
 # Compile the source

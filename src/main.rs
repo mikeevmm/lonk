@@ -1,8 +1,8 @@
 use argh::FromArgs;
 use figment::{providers::Format, Figment};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, path::PathBuf, str::FromStr, sync::Arc};
-use tokio::sync::mpsc::UnboundedSender;
+use std::{collections::BTreeSet, path::PathBuf, str::FromStr, sync::Arc, io::BufRead};
+use tokio::{sync};
 use validators::prelude::*;
 use warp::{filters::BoxedFilter, hyper::StatusCode, Filter};
 
@@ -12,6 +12,16 @@ macro_rules! unwrap_or_unwrap_err {
             Ok(x) => x,
             Err(y) => y,
         }
+    };
+}
+
+macro_rules! clone_to_move {
+    ($($y:ident),+$x:ident) => {
+        clone_to_move!($x);
+        clone_to_move!($y)
+    };
+    ($x:ident) => {
+        let $x = $x.clone();
     };
 }
 
@@ -25,12 +35,14 @@ struct Url {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct DbConfig {
     pub address: String,
+    pub worker_threads: usize,
 }
 
 impl Default for DbConfig {
     fn default() -> Self {
         Self {
             address: "redis://127.0.0.1".to_string(),
+            worker_threads: 4,
         }
     }
 }
@@ -102,17 +114,40 @@ impl FromStr for Base64WithoutPaddingUrl {
 
 #[derive(Debug)]
 struct SlugDatabase {
-    tx: UnboundedSender<SlugDbMessage>,
+    tx: sync::mpsc::UnboundedSender<SlugDbMessage>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum SlugDbMessage {
     Add(Slug, Url),
 }
 
 impl SlugDatabase {
-    fn from_client(client: redis::Client) -> Self {
-        todo!()
+    fn from_client(client: redis::Client, worker_threads: usize) -> Self {
+        let (tx, rx) = sync::mpsc::unbounded_channel::<SlugDbMessage>();
+
+        // I want a FILO queue with a spin lock for consumption.
+        // I'm not sure this is the best way to implement this.
+        // (Alternatively: is there a better architecture?)
+        let rx = Arc::new(sync::Mutex::new(rx));
+        
+        for _ in 0..worker_threads {
+            let mut connection = client.get_connection().expect("Could not open connection to Redis server.");
+            clone_to_move!(rx);
+            tokio::spawn(async move {
+                while let Some(msg) = {(*rx.lock().await).recv().await} {
+                    match msg {
+                        SlugDbMessage::Add(slug, url) => {
+                            todo!()
+                        },
+                    }
+                }
+            });
+        }
+
+        SlugDatabase {
+            tx,
+        }
     }
 
     fn insert_slug(&self, slug: Slug, url: Url) -> Result<(), ()> {
@@ -128,7 +163,7 @@ struct SlugFactory {
     slug_chars: BTreeSet<char>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Slug(String);
 
 enum InvalidSlug {
@@ -199,7 +234,7 @@ async fn serve() {
     let db = {
         let client = redis::Client::open(config.db.address).expect("Error opening Redis database.");
         //let conn = Connection::open(config.db_location).expect("Could not open database.");
-        Arc::new(SlugDatabase::from_client(client))
+        Arc::new(SlugDatabase::from_client(client, config.db.worker_threads))
     };
 
     // GET /
