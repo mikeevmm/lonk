@@ -1,8 +1,10 @@
 use argh::FromArgs;
 use figment::{providers::Format, Figment};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, path::PathBuf, str::FromStr, sync::Arc, io::BufRead};
-use tokio::{sync};
+use std::{
+    collections::BTreeSet, io::BufRead, net::IpAddr, path::PathBuf, str::FromStr, sync::Arc,
+};
+use tokio::sync;
 use validators::prelude::*;
 use warp::{filters::BoxedFilter, hyper::StatusCode, Filter};
 
@@ -20,6 +22,9 @@ macro_rules! clone_to_move {
         clone_to_move!($x);
         clone_to_move!($y)
     };
+    (mut $x:ident) => {
+        let mut $x = $x.clone();
+    };
     ($x:ident) => {
         let $x = $x.clone();
     };
@@ -34,14 +39,14 @@ struct Url {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct DbConfig {
-    pub address: String,
-    pub worker_threads: usize,
+    address: String,
+    worker_threads: usize,
 }
 
 impl Default for DbConfig {
     fn default() -> Self {
         Self {
-            address: "redis://127.0.0.1".to_string(),
+            address: "redis://127.0.0.1:6379".to_string(),
             worker_threads: 4,
         }
     }
@@ -63,23 +68,54 @@ impl Default for SlugRules {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub enum ServeRules {
+pub enum ServeDirRules {
     File(PathBuf),
     Dir(PathBuf),
 }
 
-impl ServeRules {
+impl ServeDirRules {
     pub fn to_filter(&self) -> BoxedFilter<(warp::fs::File,)> {
         match self {
-            ServeRules::File(file) => warp::fs::file(file.clone()).boxed(),
-            ServeRules::Dir(dir) => warp::fs::dir(dir.clone()).boxed(),
+            ServeDirRules::File(file) => warp::fs::file(file.clone()).boxed(),
+            ServeDirRules::Dir(dir) => warp::fs::dir(dir.clone()).boxed(),
         }
     }
 }
 
+impl Default for ServeDirRules {
+    fn default() -> Self {
+        ServeDirRules::Dir(PathBuf::from_str("/etc/lonk/served").unwrap())
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Validator, Clone)]
+#[validator(ip(local(Allow), port(Must)))]
+struct ServeAddr {
+    ip: IpAddr,
+    port: u16,
+}
+
+impl Default for ServeAddr {
+    fn default() -> Self {
+        Self {
+            ip: [127, 0, 0, 1].into(),
+            port: 8080,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct ServeRules {
+    dir: ServeDirRules,
+    addr: ServeAddr,
+}
+
 impl Default for ServeRules {
     fn default() -> Self {
-        ServeRules::Dir(PathBuf::from_str("/etc/lonk/served").unwrap())
+        Self {
+            dir: Default::default(),
+            addr: ServeAddr::default(),
+        }
     }
 }
 
@@ -130,24 +166,24 @@ impl SlugDatabase {
         // I'm not sure this is the best way to implement this.
         // (Alternatively: is there a better architecture?)
         let rx = Arc::new(sync::Mutex::new(rx));
-        
+
         for _ in 0..worker_threads {
-            let mut connection = client.get_connection().expect("Could not open connection to Redis server.");
+            let mut connection = client
+                .get_connection()
+                .expect("Could not open connection to Redis server.");
             clone_to_move!(rx);
             tokio::spawn(async move {
-                while let Some(msg) = {(*rx.lock().await).recv().await} {
+                while let Some(msg) = { (*rx.lock().await).recv().await } {
                     match msg {
                         SlugDbMessage::Add(slug, url) => {
                             todo!()
-                        },
+                        }
                     }
                 }
             });
         }
 
-        SlugDatabase {
-            tx,
-        }
+        SlugDatabase { tx }
     }
 
     fn insert_slug(&self, slug: Slug, url: Url) -> Result<(), ()> {
@@ -233,12 +269,11 @@ async fn serve() {
     // Initialize database
     let db = {
         let client = redis::Client::open(config.db.address).expect("Error opening Redis database.");
-        //let conn = Connection::open(config.db_location).expect("Could not open database.");
         Arc::new(SlugDatabase::from_client(client, config.db.worker_threads))
     };
 
     // GET /
-    let homepage = warp::path::end().and(config.serve_rules.to_filter());
+    let homepage = warp::path::end().and(config.serve_rules.dir.to_filter());
 
     // GET /shorten/:Base64WithoutPaddingUrl
     let shorten = warp::path!("shorten" / Base64WithoutPaddingUrl).map({
@@ -257,7 +292,9 @@ async fn serve() {
 
     let routes = warp::get().and(homepage.or(shorten).or(link));
 
-    warp::serve(routes).run(([127, 0, 0, 1], 8892)).await;
+    warp::serve(routes)
+        .run((config.serve_rules.addr.ip, config.serve_rules.addr.port))
+        .await;
 }
 
 #[derive(FromArgs, PartialEq, Debug)]

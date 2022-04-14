@@ -9,11 +9,10 @@ COPY ./Cargo.lock ./Cargo.lock
 COPY ./Cargo.toml ./Cargo.toml
 
 RUN cargo build
-RUN src/*.rs
+RUN rm src/*.rs
 
 # Compile the source
 COPY ./src ./src
-RUN rm ./target/release/deps/lonk*
 RUN cargo build
 
 # Execution container

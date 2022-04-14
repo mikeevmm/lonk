@@ -1,12 +1,19 @@
 {
   "db": {
-    "address": "redis://db"
+    "address": "redis://db:6379",
+    "worker_threads": 4
   },
   "slug_rules": {
     "length": 5,
     "chars": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
   },
   "serve_rules": {
-    "Dir": "/data/served"
+    "dir": {
+      "Dir": "/etc/lonk/served"
+    },
+    "addr": {
+      "ip": "127.0.0.1",
+      "port": 8080
+    }
   }
 }
