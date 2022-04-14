@@ -1,5 +1,5 @@
-# Create the build container to compile
-FROM rust:latest as builder
+# Prepare container
+FROM rust:slim-buster
 RUN USER=root cargo new --bin lonk
 WORKDIR lonk
 
@@ -14,8 +14,6 @@ RUN rm src/*.rs
 # Compile the source
 COPY ./src ./src
 RUN cargo build
+RUN cp /lonk/target/${PROFILE:-debug}/lonk .
 
-# Execution container
-FROM scratch
-COPY --from=build /lonk/target/release/lonk .
-CMD ["./lonk"]        
+CMD ["./lonk"]
