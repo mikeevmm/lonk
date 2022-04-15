@@ -1,5 +1,5 @@
 use argh::FromArgs;
-use figment::{providers::Format, Figment};
+use core::panic;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet, io::BufRead, net::IpAddr, path::PathBuf, str::FromStr, sync::Arc,
@@ -257,11 +257,45 @@ fn shorten(
 #[tokio::main]
 async fn serve() {
     // Read configuration
-    let config_file = std::env::var("LONK_CONFIG").unwrap_or("lonk.json".to_string());
-    let config: Config = Figment::new()
-        .merge(figment::providers::Json::file(&config_file))
-        .extract()
-        .expect("Could not parse configuration file.");
+
+    let config: Config = {
+        let config_file_name = std::env::var("LONK_CONFIG").unwrap_or("lonk.json".to_string());
+        let config_file = std::fs::File::open(config_file_name.clone()).unwrap_or_else(|err| {
+            match err.kind() {
+                std::io::ErrorKind::NotFound => {
+                    panic!("Configuration file {} does not exist.", config_file_name)
+                }
+                std::io::ErrorKind::PermissionDenied => {
+                    panic!("Read permission to {} was denied.", config_file_name)
+                }
+                _ => panic!(
+                    "Error when trying to read configuration file {}: {}",
+                    config_file_name, err
+                ),
+            };
+        });
+        let config_buf = std::io::BufReader::new(config_file);
+        serde_json::from_reader(config_buf).unwrap_or_else(|err| match err.classify() {
+            serde_json::error::Category::Io => panic!("IO error when reading configuration file."),
+            serde_json::error::Category::Syntax => panic!(
+                "Configuration file is syntactically incorrect.
+                    See {}:line {}, column {}.",
+                &config_file_name,
+                err.line(),
+                err.column()
+            ),
+            serde_json::error::Category::Data => panic!(
+                "Error deserializing configuration file; expected different data type.
+                    See {}:line {}, column {}.",
+                &config_file_name,
+                err.line(),
+                err.column()
+            ),
+            serde_json::error::Category::Eof => {
+                panic!("Unexpected end of file when reading configuration file.")
+            }
+        })
+    };
 
     // Create slug factory
     let slug_factory = Arc::new(SlugFactory::from_rules(config.slug_rules));
