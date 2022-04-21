@@ -9,7 +9,7 @@
   },
   "serve_rules": {
     "dir": {
-      "Dir": "/etc/lonk/served"
+      "Dir": "/data/served"
     },
     "addr": {
       "ip": "127.0.0.1",
