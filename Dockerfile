@@ -9,7 +9,7 @@ COPY ./Cargo.lock ./Cargo.lock
 COPY ./Cargo.toml ./Cargo.toml
 
 RUN cargo build
-RUN src/*.rs
+RUN rm src/*.rs
 
 # Compile the source
 COPY ./src ./src
