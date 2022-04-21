@@ -8,15 +8,18 @@ WORKDIR lonk
 COPY ./Cargo.lock ./Cargo.lock
 COPY ./Cargo.toml ./Cargo.toml
 
+ARG PROFILE
+
 RUN cargo build
 RUN rm src/*.rs
 
 # Compile the source
 COPY ./src ./src
-RUN rm ./target/release/deps/lonk*
+RUN rm ./target/${PROFILE:-release}/deps/lonk*
 RUN cargo build
 
 # Execution container
-FROM scratch
-COPY --from=build /lonk/target/release/lonk .
+FROM rust:latest
+ARG PROFILE
+COPY --from=builder /lonk/target/${PROFILE:-release}/lonk .
 CMD ["./lonk"]        

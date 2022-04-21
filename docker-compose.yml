@@ -1,10 +1,12 @@
 version: '3.9'
 services:
   lonk:
-    build: .
+    build:
+      context: .
+      args:
+        PROFILE: debug
     environment:
       - LONK_CONFIG="/data/config.json"
-      - PROFILE="debug"
     volumes:
       - ./data:/data
   redis:

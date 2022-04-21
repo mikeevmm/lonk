@@ -1,6 +1,7 @@
 {
   "db": {
-    "address": "redis://db"
+    "address": "redis://db",
+    "worker_threads": 4
   },
   "slug_rules": {
     "length": 5,
