@@ -3,8 +3,8 @@ services:
   lonk:
     build: .
     environment:
-      - LONK_CONFIG: /data/config.json
-      - PROFILE: debug
+      - LONK_CONFIG="/data/config.json"
+      - PROFILE="debug"
     volumes:
       - ./data:/data
   redis:
