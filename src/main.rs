@@ -326,6 +326,10 @@ async fn serve() {
 
     let routes = warp::get().and(homepage.or(shorten).or(link));
 
+    println!(
+        "Now serving lonk at IP {}, port {}!",
+        config.serve_rules.addr.ip, config.serve_rules.addr.port
+    );
     warp::serve(routes)
         .run((config.serve_rules.addr.ip, config.serve_rules.addr.port))
         .await;

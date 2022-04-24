@@ -1,21 +1,25 @@
 version: "3.9"
 services:
   lonk:
+    depends_on:
+      - redis
     build:
       context: .
       args:
         PROFILE: debug
     environment:
-      - LONK_CONFIG="/data/config.json"
+      - LONK_CONFIG=/data/config.json
     volumes:
       - ./data:/data
     ports:
-      - 8080:8892
+      - 8892:8080
   redis:
     image: 'redis:alpine'
-    command: redis-server --save 20 1 --loglevel warning
+    command: redis-server --save 20 1 --loglevel warning --port 6379
     volumes:
       - redis:/data
+    expose:
+      - 6379
 volumes:
   redis:
     driver: local

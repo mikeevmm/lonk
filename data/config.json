@@ -1,6 +1,6 @@
 {
   "db": {
-    "address": "redis://db:6379",
+    "address": "redis://redis:6379",
     "worker_threads": 4
   },
   "slug_rules": {
@@ -12,7 +12,7 @@
       "Dir": "/data/served"
     },
     "addr": {
-      "ip": "127.0.0.1",
+      "ip": "0.0.0.0",
       "port": 8080
     }
   }
