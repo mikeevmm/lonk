@@ -1,5 +1,8 @@
 use argh::FromArgs;
+use async_object_pool::Pool;
 use core::panic;
+use rand::prelude::*;
+use redis::Commands;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet, io::BufRead, net::IpAddr, path::PathBuf, str::FromStr, sync::Arc,
@@ -8,28 +11,6 @@ use tokio::sync;
 use validators::prelude::*;
 use warp::{filters::BoxedFilter, hyper::StatusCode, Filter};
 
-macro_rules! unwrap_or_unwrap_err {
-    ($x:expr) => {
-        match $x {
-            Ok(x) => x,
-            Err(y) => y,
-        }
-    };
-}
-
-macro_rules! clone_to_move {
-    ($($y:ident),+$x:ident) => {
-        clone_to_move!($x);
-        clone_to_move!($y)
-    };
-    (mut $x:ident) => {
-        let mut $x = $x.clone();
-    };
-    ($x:ident) => {
-        let $x = $x.clone();
-    };
-}
-
 #[derive(Serialize, Deserialize, Debug, Validator, Clone)]
 #[validator(domain(ipv4(Allow), local(Allow), at_least_two_labels(Allow), port(Allow)))]
 struct Url {
@@ -37,17 +18,26 @@ struct Url {
     port: Option<u16>,
 }
 
+impl ToString for Url {
+    fn to_string(&self) -> String {
+        match self.port {
+            Some(port) => format!("{}:{}", self.domain, port),
+            None => self.domain.clone(),
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct DbConfig {
     address: String,
-    worker_threads: usize,
+    expire_seconds: usize,
 }
 
 impl Default for DbConfig {
     fn default() -> Self {
         Self {
             address: "redis://127.0.0.1:6379".to_string(),
-            worker_threads: 4,
+            expire_seconds: 259200, // 3 days
         }
     }
 }
@@ -154,49 +144,158 @@ struct SlugDatabase {
 }
 
 #[derive(Clone, Debug)]
+enum AddResult {
+    Success(Slug),
+    Fail,
+}
+
+#[derive(Clone, Debug)]
+enum GetResult {
+    Found(Url),
+    NotFound,
+    InternalError,
+}
+
 enum SlugDbMessage {
-    Add(Slug, Url),
+    Add(Slug, Url, sync::oneshot::Sender<AddResult>),
+    Get(Slug, sync::oneshot::Sender<GetResult>),
+}
+
+impl core::fmt::Debug for SlugDbMessage {
+    fn fmt(&self, f: &mut validators_prelude::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Add(arg0, arg1, _) => f
+                .debug_tuple("Add")
+                .field(arg0)
+                .field(arg1)
+                .field(&"oneshot::Sender<AddResult>")
+                .finish(),
+            SlugDbMessage::Get(arg0, _) => f
+                .debug_tuple("Get")
+                .field(arg0)
+                .field(&"oneshot::Sender<Url>")
+                .finish(),
+        }
+    }
 }
 
 impl SlugDatabase {
-    fn from_client(client: redis::Client, worker_threads: usize) -> Self {
-        let (tx, rx) = sync::mpsc::unbounded_channel::<SlugDbMessage>();
+    fn from_client(client: redis::Client, expire_seconds: usize) -> Self {
+        let (tx, mut rx) = sync::mpsc::unbounded_channel::<SlugDbMessage>();
 
-        // I want a FILO queue with a spin lock for consumption.
-        // I'm not sure this is the best way to implement this.
-        // (Alternatively: is there a better architecture?)
-        let rx = Arc::new(sync::Mutex::new(rx));
+        tokio::spawn(async move {
+            let pool = Arc::new(sync::Mutex::new(Pool::new(100)));
 
-        for _ in 0..worker_threads {
-            let mut connection = client
-                .get_connection()
-                .expect("Could not open connection to Redis server.");
-            clone_to_move!(rx);
-            tokio::spawn(async move {
-                while let Some(msg) = { (*rx.lock().await).recv().await } {
+            while let Some(msg) = { rx.recv().await } {
+                let mut connection = {
+                    (*pool.lock().await)
+                        .take_or_create(|| {
+                            client
+                                .get_connection()
+                                .expect("Could not open connection to Redis server.")
+                        })
+                        .await
+                };
+
+                let pool = pool.clone();
+                tokio::spawn(async move {
                     match msg {
-                        SlugDbMessage::Add(slug, url) => {
-                            todo!()
+                        SlugDbMessage::Add(requested_slug, url, response_channel) => {
+                            let url_str = url.to_string();
+                            // Check that the URL is not already present in the DB
+                            // This is, to some extent, a protection against collision attacks.
+                            match connection
+                                .get::<String, Option<String>>(format!("url:{}", url_str))
+                            {
+                                Ok(Some(slug)) => {
+                                    // The URL was already present, just return that.
+                                    response_channel.send(AddResult::Success(Slug(slug))).ok();
+                                    return;
+                                }
+                                Err(_) => {
+                                    response_channel.send(AddResult::Fail).ok();
+                                    return;
+                                }
+                                _ => {} // Ok(None); continue with insertion
+                            };
+
+                            // The URL is not present in the database; insert it.
+                            let add_result = connection.set_ex::<String, String, usize>(
+                                format!("slug:{}", requested_slug.0),
+                                url_str.clone(),
+                                expire_seconds,
+                            );
+                            if add_result.is_ok() {
+                                connection
+                                    .set_ex::<String, String, usize>(
+                                        format!("url:{}", url_str),
+                                        requested_slug.0.clone(),
+                                        expire_seconds,
+                                    )
+                                    .ok(); // If this failed we have no way of correcting for it.
+                            }
+                            response_channel
+                                .send(match add_result {
+                                    Ok(_) => AddResult::Success(requested_slug),
+                                    Err(_) => AddResult::Fail,
+                                })
+                                .ok(); // If the receiver has hung up there's nothing we can do.
+                        }
+                        SlugDbMessage::Get(slug, response_channel) => {
+                            let result: Result<Option<String>, _> =
+                                connection.get(format!("slug:{}", slug.0));
+                            match result {
+                                Ok(Some(url)) => response_channel.send(GetResult::Found(
+                                    Url::parse_string(url)
+                                        .expect("Mismatched URL in the database."),
+                                )),
+                                Ok(None) => response_channel.send(GetResult::NotFound),
+                                Err(_) => response_channel.send(GetResult::InternalError),
+                            }
+                            .ok(); // If the receiver has hung up there's nothing we can do.
                         }
                     }
-                }
-            });
-        }
+
+                    (*pool.lock().await).put(connection).await;
+                });
+            }
+        });
 
         SlugDatabase { tx }
     }
 
-    fn insert_slug(&self, slug: Slug, url: Url) -> Result<(), ()> {
+    fn insert_slug(
+        &self,
+        requested_slug: Slug,
+        url: Url,
+    ) -> Result<sync::oneshot::Receiver<AddResult>, ()> {
+        let (tx, rx) = sync::oneshot::channel();
         self.tx
-            .send(SlugDbMessage::Add(slug, url))
-            .expect("Could not send message.");
-        Ok(())
+            .send(SlugDbMessage::Add(requested_slug, url, tx))
+            .expect("The SlugDbMessage channel is unexpectedly closed.");
+        Ok(rx)
+    }
+
+    async fn get_slug(&self, slug: Slug) -> Result<Option<Url>, ()> {
+        let (tx, rx) = sync::oneshot::channel();
+        self.tx
+            .send(SlugDbMessage::Get(slug, tx))
+            .expect("The SlugDbMessage channel is unexpectedly closed.");
+        match rx
+            .await
+            .expect("The query channel was unexpectedly dropped.")
+        {
+            GetResult::Found(url) => Ok(Some(url)),
+            GetResult::NotFound => Ok(None),
+            GetResult::InternalError => Err(()),
+        }
     }
 }
 
 struct SlugFactory {
     slug_length: usize,
     slug_chars: BTreeSet<char>,
+    slug_chars_indexable: Vec<char>,
 }
 
 #[derive(Clone, Debug)]
@@ -215,6 +314,7 @@ impl SlugFactory {
         SlugFactory {
             slug_length: rules.length,
             slug_chars,
+            slug_chars_indexable: rules.chars.chars().collect(),
         }
     }
 
@@ -233,15 +333,22 @@ impl SlugFactory {
     }
 
     fn generate(&self) -> Slug {
-        todo!()
+        // Generate indices then map
+        let distribution = rand::distributions::Uniform::new(0, self.slug_chars_indexable.len());
+        let slug_str = distribution
+            .sample_iter(rand::thread_rng())
+            .take(self.slug_length)
+            .map(|i| self.slug_chars_indexable[i])
+            .collect::<String>();
+        Slug(slug_str)
     }
 }
 
-fn shorten(
+async fn shorten(
     slug_factory: &SlugFactory,
     db: &SlugDatabase,
     b64url: &str,
-) -> Result<StatusCode, StatusCode> {
+) -> Result<Slug, StatusCode> {
     let url = {
         let raw = base64::decode_config(b64url, base64::URL_SAFE_NO_PAD)
             .map_err(|_| warp::http::StatusCode::BAD_REQUEST)?;
@@ -250,8 +357,17 @@ fn shorten(
     };
 
     let new_slug = slug_factory.generate();
-
-    Ok(warp::http::StatusCode::OK)
+    let insert_result = db.insert_slug(new_slug, url);
+    match insert_result {
+        Ok(receiver) => match receiver.await {
+            Ok(result) => match result {
+                AddResult::Success(slug) => Ok(slug),
+                AddResult::Fail => Err(warp::http::StatusCode::INTERNAL_SERVER_ERROR),
+            },
+            Err(_) => Err(warp::http::StatusCode::INTERNAL_SERVER_ERROR),
+        },
+        Err(_) => Err(warp::http::StatusCode::INTERNAL_SERVER_ERROR),
+    }
 }
 
 #[tokio::main]
@@ -303,7 +419,7 @@ async fn serve() {
     // Initialize database
     let db = {
         let client = redis::Client::open(config.db.address).expect("Error opening Redis database.");
-        Arc::new(SlugDatabase::from_client(client, config.db.worker_threads))
+        Arc::new(SlugDatabase::from_client(client, config.db.expire_seconds))
     };
 
     // GET /
@@ -311,11 +427,11 @@ async fn serve() {
 
     // GET /shorten/:Base64WithoutPaddingUrl
     let shorten = warp::path!("shorten" / Base64WithoutPaddingUrl).map({
-        move |link: Base64WithoutPaddingUrl| {
-            warp::reply::with_status(
-                warp::reply(),
-                unwrap_or_unwrap_err!(shorten(&slug_factory, &db, &link.0)),
-            )
+        move |link: Base64WithoutPaddingUrl| async {
+            match shorten(&slug_factory, &db, &link.0).await {
+                Ok(slug) => warp::redirect::found("/"),
+                Err(status) => warp::reply::with_status(warp::reply::reply(), status),
+            }
         }
     });
 

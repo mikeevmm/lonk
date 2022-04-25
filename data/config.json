@@ -1,7 +1,7 @@
 {
   "db": {
     "address": "redis://redis:6379",
-    "worker_threads": 4
+    "expire_seconds": 259200
   },
   "slug_rules": {
     "length": 5,
