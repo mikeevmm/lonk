@@ -1,5 +1,5 @@
 # Prepare container
-FROM rust:slim-buster as builder
+FROM rust:latest as builder
 RUN USER=root cargo new --bin lonk
 WORKDIR /lonk
 
@@ -19,7 +19,7 @@ RUN rm ./target/${PROFILE:-release}/deps/lonk*
 RUN cargo build
 
 # Execution container
-FROM rust:slim-buster
+FROM rust:latest
 WORKDIR /
 ARG PROFILE
 COPY --from=builder /lonk/target/${PROFILE:-release}/lonk /bin/lonk

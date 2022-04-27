@@ -4,12 +4,23 @@ use core::panic;
 use rand::prelude::*;
 use redis::Commands;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeSet, io::BufRead, net::IpAddr, path::PathBuf, str::FromStr, sync::Arc,
-};
+use std::{collections::BTreeSet, net::IpAddr, path::PathBuf, str::FromStr, sync::Arc};
 use tokio::sync;
 use validators::prelude::*;
-use warp::{filters::BoxedFilter, hyper::StatusCode, Filter};
+use warp::{filters::BoxedFilter, http::Response, hyper::StatusCode, Filter};
+
+macro_rules! clone {
+    (mut $y:ident) => {
+        let mut $y = $y.clone();
+    };
+    ($y:ident) => {
+        let $y = $y.clone();
+    };
+    ($y:ident, $($x:ident),+) => {
+        clone!($y);
+        clone!($($x),+);
+    };
+}
 
 #[derive(Serialize, Deserialize, Debug, Validator, Clone)]
 #[validator(domain(ipv4(Allow), local(Allow), at_least_two_labels(Allow), port(Allow)))]
@@ -370,6 +381,22 @@ async fn shorten(
     }
 }
 
+async fn insert_slug(
+    b64url: Base64WithoutPaddingUrl,
+    slug_factory: &SlugFactory,
+    db: &SlugDatabase,
+) -> Response<String> {
+    match shorten(&slug_factory, &db, &b64url.0).await {
+        Ok(slug) => Response::builder()
+            .body(format!("slug = {}", slug.0))
+            .unwrap(),
+        Err(status) => Response::builder()
+            .status(status)
+            .body("Failed to shorten link.".to_string())
+            .unwrap(),
+    }
+}
+
 #[tokio::main]
 async fn serve() {
     // Read configuration
@@ -414,25 +441,26 @@ async fn serve() {
     };
 
     // Create slug factory
-    let slug_factory = Arc::new(SlugFactory::from_rules(config.slug_rules));
+    let slug_factory = SlugFactory::from_rules(config.slug_rules);
 
     // Initialize database
     let db = {
         let client = redis::Client::open(config.db.address).expect("Error opening Redis database.");
-        Arc::new(SlugDatabase::from_client(client, config.db.expire_seconds))
+        SlugDatabase::from_client(client, config.db.expire_seconds)
     };
+
+    // We leak the slug factory and the database, because we know that these
+    // will live forever, and want them to have 'static lifetime so that warp is
+    // happy.
+    let slug_factory: &'static SlugFactory = Box::leak(Box::new(slug_factory));
+    let db: &'static SlugDatabase = Box::leak(Box::new(db));
 
     // GET /
     let homepage = warp::path::end().and(config.serve_rules.dir.to_filter());
 
     // GET /shorten/:Base64WithoutPaddingUrl
-    let shorten = warp::path!("shorten" / Base64WithoutPaddingUrl).map({
-        move |link: Base64WithoutPaddingUrl| async {
-            match shorten(&slug_factory, &db, &link.0).await {
-                Ok(slug) => warp::redirect::found("/"),
-                Err(status) => warp::reply::with_status(warp::reply::reply(), status),
-            }
-        }
+    let shorten = warp::path!("shorten" / Base64WithoutPaddingUrl).then({
+        |b64url: Base64WithoutPaddingUrl| insert_slug(b64url, slug_factory, db)
     });
 
     // GET /l/:Slug
@@ -449,6 +477,8 @@ async fn serve() {
     warp::serve(routes)
         .run((config.serve_rules.addr.ip, config.serve_rules.addr.port))
         .await;
+
+    unreachable!("The warp server runs forever.")
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
