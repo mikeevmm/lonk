@@ -463,20 +463,23 @@ async fn serve() {
         .and(warp::path("shorten"))
         .and(warp::body::content_length_limit(1024))
         .and(warp::body::bytes())
-        .then(|body: warp::hyper::body::Bytes| {
+        .then(move |body: warp::hyper::body::Bytes| async move {
             let unencoded_str = std::str::from_utf8(&body[..]);
             if unencoded_str.is_err() {
-                return async { warp::reject::reject() };
+                return Response::builder()
+                    .status(warp::http::StatusCode::BAD_REQUEST)
+                    .body(String::new())
+                    .unwrap();
             }
             let b64url = Base64WithoutPaddingUrl::from_str(unencoded_str.unwrap());
             if b64url.is_err() {
-                return async { warp::reject::reject() };
+                return Response::builder()
+                    .status(warp::http::StatusCode::BAD_REQUEST)
+                    .body(String::new())
+                    .unwrap();
             }
-            insert_slug(b64url.unwrap(), slug_factory, db)
+            insert_slug(b64url.unwrap(), slug_factory, db).await
         });
-    /*warp::path!("shorten" / Base64WithoutPaddingUrl).then({
-        |b64url: Base64WithoutPaddingUrl| insert_slug(b64url, slug_factory, db)
-    })*/
 
     // GET /l/:Slug
     let link = warp::path("l")
