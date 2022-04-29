@@ -137,18 +137,6 @@ impl Default for Config {
     }
 }
 
-#[derive(Debug, Validator)]
-#[validator(base64_url(padding(NotAllow)))]
-struct Base64WithoutPaddingUrl(String);
-
-impl FromStr for Base64WithoutPaddingUrl {
-    type Err = <Self as ValidateString>::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse_str(s)
-    }
-}
-
 #[derive(Debug)]
 struct SlugDatabase {
     tx: sync::mpsc::UnboundedSender<SlugDbMessage>,
@@ -358,13 +346,25 @@ impl SlugFactory {
 async fn shorten(
     slug_factory: &SlugFactory,
     db: &SlugDatabase,
-    b64url: &str,
-) -> Result<Slug, StatusCode> {
+    b64str: &str,
+) -> Result<Slug, (StatusCode, String)> {
     let url = {
-        let raw = base64::decode_config(b64url, base64::URL_SAFE_NO_PAD)
-            .map_err(|_| warp::http::StatusCode::BAD_REQUEST)?;
-        let url_str = std::str::from_utf8(&raw).map_err(|_| warp::http::StatusCode::BAD_REQUEST)?;
-        Url::parse_str(url_str).map_err(|_| warp::http::StatusCode::BAD_REQUEST)?
+        let unencoded_bytes =
+            base64::decode_config(b64str, base64::URL_SAFE_NO_PAD).map_err(|_| {
+                (
+                    warp::http::StatusCode::BAD_REQUEST,
+                    "Invalid URL Base64.".into(),
+                )
+            })?;
+        let url_str = std::str::from_utf8(&unencoded_bytes[..]).map_err(|_| {
+            (
+                warp::http::StatusCode::BAD_REQUEST,
+                "Invalid URL Base64.".into(),
+            )
+        })?;
+        eprintln!("{}", url_str);
+        Url::parse_str(url_str)
+            .map_err(|_| (warp::http::StatusCode::BAD_REQUEST, "Invalid URL.".into()))?
     };
 
     let new_slug = slug_factory.generate();
@@ -373,27 +373,31 @@ async fn shorten(
         Ok(receiver) => match receiver.await {
             Ok(result) => match result {
                 AddResult::Success(slug) => Ok(slug),
-                AddResult::Fail => Err(warp::http::StatusCode::INTERNAL_SERVER_ERROR),
+                AddResult::Fail => Err((
+                    warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal error.".into(),
+                )),
             },
-            Err(_) => Err(warp::http::StatusCode::INTERNAL_SERVER_ERROR),
+            Err(_) => Err((
+                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal error.".into(),
+            )),
         },
-        Err(_) => Err(warp::http::StatusCode::INTERNAL_SERVER_ERROR),
+        Err(()) => Err((
+            warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal error.".into(),
+        )),
     }
 }
 
 async fn insert_slug(
-    b64url: Base64WithoutPaddingUrl,
+    b64str: &str,
     slug_factory: &SlugFactory,
     db: &SlugDatabase,
 ) -> Response<String> {
-    match shorten(&slug_factory, &db, &b64url.0).await {
-        Ok(slug) => Response::builder()
-            .body(format!("slug = {}", slug.0))
-            .unwrap(),
-        Err(status) => Response::builder()
-            .status(status)
-            .body("Failed to shorten link.".to_string())
-            .unwrap(),
+    match shorten(&slug_factory, &db, b64str).await {
+        Ok(slug) => Response::builder().body(format!("{}", slug.0)).unwrap(),
+        Err((status, message)) => Response::builder().status(status).body(message).unwrap(),
     }
 }
 
@@ -464,21 +468,14 @@ async fn serve() {
         .and(warp::body::content_length_limit(1024))
         .and(warp::body::bytes())
         .then(move |body: warp::hyper::body::Bytes| async move {
-            let unencoded_str = std::str::from_utf8(&body[..]);
-            if unencoded_str.is_err() {
+            let b64str = std::str::from_utf8(&body[..]);
+            if b64str.is_err() {
                 return Response::builder()
                     .status(warp::http::StatusCode::BAD_REQUEST)
                     .body(String::new())
                     .unwrap();
             }
-            let b64url = Base64WithoutPaddingUrl::from_str(unencoded_str.unwrap());
-            if b64url.is_err() {
-                return Response::builder()
-                    .status(warp::http::StatusCode::BAD_REQUEST)
-                    .body(String::new())
-                    .unwrap();
-            }
-            insert_slug(b64url.unwrap(), slug_factory, db).await
+            insert_slug(b64str.unwrap(), slug_factory, db).await
         });
 
     // GET /l/:Slug
