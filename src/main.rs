@@ -483,7 +483,9 @@ async fn serve() {
         .and(warp::path::param())
         .map(|slug: String| warp::reply());
 
-    let routes = warp::get().and(homepage.or(shorten).or(link));
+    let get_routes = warp::get().and(homepage.or(link));
+    let post_routes = warp::post().and(shorten);
+    let routes = get_routes.or(post_routes);
 
     println!(
         "Now serving lonk at IP {}, port {}!",
