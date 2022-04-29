@@ -675,23 +675,21 @@ async fn shorten(
     db: &db::SlugDatabase,
     b64str: &str,
 ) -> Result<slug::Slug, (StatusCode, String)> {
-    // Parse the URL given by the user. It should arrive as a URL Base64
-    // no-padding string, and anything other than this should cleanly result in
-    // an HTTP rejection.
+    // Parse the URL given by the user. It should arrive as a Base64 string,
+    // and anything other than this should cleanly result in an HTTP rejection.
     let url = {
-        let unencoded_bytes =
-            base64::decode_config(b64str, base64::URL_SAFE_NO_PAD).map_err(|_| {
-                (
-                    warp::http::StatusCode::BAD_REQUEST,
-                    debuginfo!("Could not decode base64 str.", "Invalid URL Base64.").into(),
-                )
-            })?;
+        let unencoded_bytes = base64::decode_config(b64str, base64::STANDARD).map_err(|_| {
+            (
+                warp::http::StatusCode::BAD_REQUEST,
+                debuginfo!("Could not decode base64 str.", "Invalid Base64.").into(),
+            )
+        })?;
         let url_str = std::str::from_utf8(&unencoded_bytes[..]).map_err(|_| {
             (
                 warp::http::StatusCode::BAD_REQUEST,
                 debuginfo!(
                     "Parsed bytes of base64 str, but could not decode as UTF8.",
-                    "Invalid URL Base64."
+                    "Invalid Base64."
                 )
                 .into(),
             )
@@ -825,7 +823,7 @@ async fn serve() {
     // GET /
     let homepage = warp::path::end().and(config.serve_rules.dir.to_filter());
 
-    // POST /shorten/ with argument link:Base64WithoutPaddingUrl
+    // POST /shorten/ with link in argument
     let shorten = warp::post()
         .and(warp::path("shorten"))
         .and(warp::body::content_length_limit(1024))
