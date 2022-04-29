@@ -1,13 +1,30 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset='utf-8'>
     <meta http-equiv='X-UA-Compatible' content='IE=edge'>
     <title>Lonk</title>
     <meta name='viewport' content='width=device-width, initial-scale=1'>
     <link rel='stylesheet' type='text/css' media='screen' href='main.css'>
+    <script src="main.js"></script>
 </head>
+
 <body>
-    
+    <h1 id="shortened"></h1>
+
+    <!-- Yes, this form requires Javascript, sorry. 
+         I promise there are no trackers on this page,
+         but if you're tech savvy (and paranoid) enough to
+         be browsing the web with Javascript blocked, then
+         just do a POST request to /shorten with the URL you
+         wish to shorten Base64-encoded as the body. -->
+    <form id="form">
+        <input type="url" name="url" id="url" required>
+        <input type="submit" hidden />
+    </form>
+
+    <p id="info"></p>
 </body>
+
 </html>
