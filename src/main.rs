@@ -549,19 +549,18 @@ mod service {
             }
 
             /// Request the URL associated to the provided slug, if it exists.
-            pub async fn get_slug(&self, slug: Slug) -> Result<Option<HttpUrl>, ()> {
+            ///
+            /// This is an asynchronous operation; as such, a
+            /// `oneshot::Receiver` is returned, rather than a result. One
+            /// should await on this receiver for the result of the operation.
+            /// (Note that, as a consequence of this, this function is *not*
+            /// asynchronous.)
+            pub fn get_slug(&self, slug: Slug) -> sync::oneshot::Receiver<GetResult> {
                 let (tx, rx) = sync::oneshot::channel();
                 self.tx
                     .send(SlugDbMessage::Get(slug, tx))
                     .expect("The SlugDbMessage channel is unexpectedly closed.");
-                match rx
-                    .await
-                    .expect("The query channel was unexpectedly dropped.")
-                {
-                    GetResult::Found(url) => Ok(Some(url)),
-                    GetResult::NotFound => Ok(None),
-                    GetResult::InternalError => Err(()),
-                }
+                rx
             }
         }
     }
@@ -719,7 +718,47 @@ async fn shorten(
             ifdbg!(eprintln!("{}", e));
             Err((
                 warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-                debuginfo!("Receiver error on response of slug insertion.").into(),
+                debuginfo!("Response channel for insertion is unexpectedly closed").into(),
+            ))
+        }
+    }
+}
+
+/// Redirect from a slug.
+async fn redirect(
+    slug_str: &str,
+    slug_factory: &slug::SlugFactory,
+    db: &db::SlugDatabase,
+) -> Result<HttpUrl, (StatusCode, String)> {
+    // Check that the slug is valid.
+    let slug = slug_factory.parse_str(slug_str).map_err(|e| match e {
+        slug::InvalidSlug::TooLong => (
+            warp::http::StatusCode::BAD_REQUEST,
+            debuginfo!("Given slug is too long.", "Invalid URL.").into(),
+        ),
+        slug::InvalidSlug::BadChar => (
+            warp::http::StatusCode::BAD_REQUEST,
+            debuginfo!("Given slug has invalid characters.", "Invalid URL.").into(),
+        ),
+    })?;
+
+    match db.get_slug(slug).await {
+        Ok(result) => match result {
+            db::GetResult::Found(url) => Ok(url),
+            db::GetResult::NotFound => Err((
+                warp::http::StatusCode::BAD_REQUEST,
+                debuginfo!("The slug does not exist in the database.", "Invalid URL.").into(),
+            )),
+            db::GetResult::InternalError => Err((
+                warp::http::StatusCode::BAD_REQUEST,
+                "Internal error.".into(),
+            )),
+        },
+        Err(e) => {
+            ifdbg!(eprintln!("{}", e));
+            Err((
+                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                debuginfo!("Response channel for insertion is unexpectedly closed").into(),
             ))
         }
     }
@@ -810,13 +849,22 @@ async fn serve() {
     // GET /l/:Slug
     let link = warp::path("l")
         .and(warp::path::param())
-        .map(|slug: String| warp::reply());
+        .then(move |slug: String| async move {
+            match redirect(&slug, &slug_factory, &db).await {
+                Ok(url) => Response::builder()
+                    .status(warp::http::StatusCode::FOUND)
+                    .header("Location", url.to_string())
+                    .body("".to_string())
+                    .unwrap(),
+                Err((status, message)) => Response::builder().status(status).body(message).unwrap(),
+            }
+        });
 
     let get_routes = warp::get().and(homepage.or(link));
     let post_routes = warp::post().and(shorten);
     let routes = get_routes.or(post_routes);
 
-    println!(
+    eprintln!(
         "Now serving lonk at IP {}, port {}!",
         config.serve_rules.addr.ip, config.serve_rules.addr.port
     );
