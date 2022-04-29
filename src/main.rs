@@ -22,19 +22,51 @@ macro_rules! clone {
     };
 }
 
-#[derive(Serialize, Deserialize, Debug, Validator, Clone)]
-#[validator(domain(ipv4(Allow), local(Allow), at_least_two_labels(Allow), port(Allow)))]
-struct Url {
-    domain: String,
-    port: Option<u16>,
+#[cfg(debug_assertions)]
+macro_rules! debuginfo {
+    ($log:literal) => {
+        $log
+    };
+    ($log:literal,$alt:literal) => {
+        $log
+    };
 }
 
-impl ToString for Url {
-    fn to_string(&self) -> String {
-        match self.port {
-            Some(port) => format!("{}:{}", self.domain, port),
-            None => self.domain.clone(),
-        }
+#[cfg(not(debug_assertions))]
+macro_rules! debuginfo {
+    ($log:literal) => {
+        "Internal error."
+    };
+    ($log:literal,$alt:literal) => {
+        $alt
+    };
+}
+
+#[cfg(debug_assertions)]
+macro_rules! ifdbg {
+    ($expr:expr) => {
+        $expr;
+    };
+}
+
+#[cfg(not(debug_assertions))]
+macro_rules! ifdbg {
+    ($expr:expr) => {
+        ()
+    };
+}
+
+#[derive(Validator)]
+#[validator(http_url(local(Allow)))]
+#[derive(Clone, Debug)]
+pub struct HttpUrl {
+    url: validators::url::Url,
+    is_https: bool,
+}
+
+impl std::fmt::Display for HttpUrl {
+    fn fmt(&self, f: &mut validators_prelude::Formatter<'_>) -> std::fmt::Result {
+        self.url.fmt(f)
     }
 }
 
@@ -150,13 +182,13 @@ enum AddResult {
 
 #[derive(Clone, Debug)]
 enum GetResult {
-    Found(Url),
+    Found(HttpUrl),
     NotFound,
     InternalError,
 }
 
 enum SlugDbMessage {
-    Add(Slug, Url, sync::oneshot::Sender<AddResult>),
+    Add(Slug, HttpUrl, sync::oneshot::Sender<AddResult>),
     Get(Slug, sync::oneshot::Sender<GetResult>),
 }
 
@@ -211,22 +243,23 @@ impl SlugDatabase {
                                     response_channel.send(AddResult::Success(Slug(slug))).ok();
                                     return;
                                 }
-                                Err(_) => {
+                                Err(err) => {
                                     response_channel.send(AddResult::Fail).ok();
+                                    ifdbg!(eprintln!("{}", err));
                                     return;
                                 }
                                 _ => {} // Ok(None); continue with insertion
                             };
 
                             // The URL is not present in the database; insert it.
-                            let add_result = connection.set_ex::<String, String, usize>(
+                            let add_result = connection.set_ex::<String, String, ()>(
                                 format!("slug:{}", requested_slug.0),
                                 url_str.clone(),
                                 expire_seconds,
                             );
                             if add_result.is_ok() {
                                 connection
-                                    .set_ex::<String, String, usize>(
+                                    .set_ex::<String, String, ()>(
                                         format!("url:{}", url_str),
                                         requested_slug.0.clone(),
                                         expire_seconds,
@@ -236,7 +269,10 @@ impl SlugDatabase {
                             response_channel
                                 .send(match add_result {
                                     Ok(_) => AddResult::Success(requested_slug),
-                                    Err(_) => AddResult::Fail,
+                                    Err(err) => {
+                                        ifdbg!(eprintln!("{}", err));
+                                        AddResult::Fail
+                                    }
                                 })
                                 .ok(); // If the receiver has hung up there's nothing we can do.
                         }
@@ -245,11 +281,14 @@ impl SlugDatabase {
                                 connection.get(format!("slug:{}", slug.0));
                             match result {
                                 Ok(Some(url)) => response_channel.send(GetResult::Found(
-                                    Url::parse_string(url)
+                                    HttpUrl::parse_string(url)
                                         .expect("Mismatched URL in the database."),
                                 )),
                                 Ok(None) => response_channel.send(GetResult::NotFound),
-                                Err(_) => response_channel.send(GetResult::InternalError),
+                                Err(err) => {
+                                    ifdbg!(eprintln!("{}", err));
+                                    response_channel.send(GetResult::InternalError)
+                                }
                             }
                             .ok(); // If the receiver has hung up there's nothing we can do.
                         }
@@ -266,16 +305,16 @@ impl SlugDatabase {
     fn insert_slug(
         &self,
         requested_slug: Slug,
-        url: Url,
-    ) -> Result<sync::oneshot::Receiver<AddResult>, ()> {
+        url: HttpUrl,
+    ) -> sync::oneshot::Receiver<AddResult> {
         let (tx, rx) = sync::oneshot::channel();
         self.tx
             .send(SlugDbMessage::Add(requested_slug, url, tx))
             .expect("The SlugDbMessage channel is unexpectedly closed.");
-        Ok(rx)
+        rx
     }
 
-    async fn get_slug(&self, slug: Slug) -> Result<Option<Url>, ()> {
+    async fn get_slug(&self, slug: Slug) -> Result<Option<HttpUrl>, ()> {
         let (tx, rx) = sync::oneshot::channel();
         self.tx
             .send(SlugDbMessage::Get(slug, tx))
@@ -353,40 +392,40 @@ async fn shorten(
             base64::decode_config(b64str, base64::URL_SAFE_NO_PAD).map_err(|_| {
                 (
                     warp::http::StatusCode::BAD_REQUEST,
-                    "Invalid URL Base64.".into(),
+                    debuginfo!("Could not decode base64 str.", "Invalid URL Base64.").into(),
                 )
             })?;
         let url_str = std::str::from_utf8(&unencoded_bytes[..]).map_err(|_| {
             (
                 warp::http::StatusCode::BAD_REQUEST,
-                "Invalid URL Base64.".into(),
+                debuginfo!(
+                    "Parsed bytes of base64 str, but could not decode as UTF8.",
+                    "Invalid URL Base64."
+                )
+                .into(),
             )
         })?;
-        eprintln!("{}", url_str);
-        Url::parse_str(url_str)
+        HttpUrl::parse_str(url_str)
             .map_err(|_| (warp::http::StatusCode::BAD_REQUEST, "Invalid URL.".into()))?
     };
 
     let new_slug = slug_factory.generate();
-    let insert_result = db.insert_slug(new_slug, url);
+    let insert_result = db.insert_slug(new_slug, url).await;
     match insert_result {
-        Ok(receiver) => match receiver.await {
-            Ok(result) => match result {
-                AddResult::Success(slug) => Ok(slug),
-                AddResult::Fail => Err((
-                    warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    "Internal error.".into(),
-                )),
-            },
-            Err(_) => Err((
+        Ok(result) => match result {
+            AddResult::Success(slug) => Ok(slug),
+            AddResult::Fail => Err((
                 warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal error.".into(),
+                debuginfo!("Got insertion response, but it was error.").into(),
             )),
         },
-        Err(()) => Err((
-            warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal error.".into(),
-        )),
+        Err(e) => {
+            ifdbg!(eprintln!("{}", e));
+            Err((
+                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
+                debuginfo!("Receiver error on response of slug insertion.").into(),
+            ))
+        }
     }
 }
 
