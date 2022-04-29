@@ -820,9 +820,6 @@ async fn serve() {
     let slug_factory: &'static slug::SlugFactory = Box::leak(Box::new(slug_factory));
     let db: &'static db::SlugDatabase = Box::leak(Box::new(db));
 
-    // GET /
-    let homepage = warp::path::end().and(config.serve_rules.dir.to_filter());
-
     // POST /shorten/ with link in argument
     let shorten = warp::post()
         .and(warp::path("shorten"))
@@ -858,7 +855,12 @@ async fn serve() {
             }
         });
 
-    let get_routes = warp::get().and(homepage.or(link));
+    // GET /
+    // This should be the last thing matched, so that anything that doesn't
+    //  match another filter will try to match a file.
+    let homepage = warp::get().and(config.serve_rules.dir.to_filter());
+
+    let get_routes = warp::get().and(link.or(homepage));
     let post_routes = warp::post().and(shorten);
     let routes = get_routes.or(post_routes);
 
