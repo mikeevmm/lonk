@@ -6,19 +6,6 @@ use warp::{http::Response, hyper::StatusCode, Filter};
 #[macro_use]
 /// Module containing custom defined macros.
 mod macros {
-    macro_rules! clone {
-        (mut $y:ident) => {
-            let mut $y = $y.clone();
-        };
-        ($y:ident) => {
-            let $y = $y.clone();
-        };
-        ($y:ident, $($x:ident),+) => {
-            clone!($y);
-            clone!($($x),+);
-        };
-    }
-
     /// Macros useful for debug contexts.
     ///
     /// For example, `ifdbg!(expr)` replaces the $expr with () when the compile
@@ -89,8 +76,6 @@ mod macros {
         }
     }
 }
-
-use macros::debug;
 
 /// Affine to static configuration.
 mod conf {
