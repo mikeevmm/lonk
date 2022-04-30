@@ -231,6 +231,13 @@ mod service {
         is_https: bool,
     }
 
+    #[derive(Validator)]
+    #[validator(domain(ipv4(Allow), local(NotAllow), at_least_two_labels(Must), port(Allow)))]
+    pub struct Domain {
+        domain: String,
+        port: Option<u16>,
+    }
+
     impl std::fmt::Display for HttpUrl {
         fn fmt(&self, f: &mut validators_prelude::Formatter<'_>) -> std::fmt::Result {
             self.url.fmt(f)
@@ -238,19 +245,16 @@ mod service {
     }
 
     impl HttpUrl {
-        /// Transform this into an `Err(())` if the url does not match more
-        /// criteria.
+        /// Transform this into an `Err(())` if the url is not a `Domain`.
         pub fn strict(self) -> Result<Self, ()> {
-            // Don't even bother with URLs that don't have hosts.
-            if !self.url.has_host() {
-                return Err(());
+            match self.url.domain() {
+                None => return Err(()),
+                Some(domain) => {
+                    if Domain::parse_string(domain).is_err() {
+                        return Err(());
+                    }
+                }
             }
-
-            // URLs that cannot be a base are weird (UNIX sockets, data types)
-            if self.url.cannot_be_a_base() {
-                return Err(())
-            }
-
             Ok(self)
         }
     }
