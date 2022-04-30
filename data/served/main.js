@@ -12,8 +12,19 @@
 
         // Select the full link with one click
         shortened.onclick = () => {
-            this.focus();
-            this.select();
+            if (document.body.createTextRange) {
+                const range = document.body.createTextRange();
+                range.moveToElementText(shortened);
+                range.select();
+            } else if (window.getSelection) {
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(shortened);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            } else {
+                // Highlight unsupported
+            }
         };
 
         // Set up the actual submission

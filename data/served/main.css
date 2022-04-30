@@ -34,7 +34,7 @@ body {
 #shortened {
     font-size: calc(min(20pt, 10vw));
     font-family: monospace;
-    color: #385d22;
+    color: #99ff5e;
     text-align: center;
 }
 
