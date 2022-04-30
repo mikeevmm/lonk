@@ -6,7 +6,7 @@ services:
     build:
       context: .
       args:
-        PROFILE: debug
+        PROFILE: release
     environment:
       - LONK_CONFIG=/data/config.json
     volumes:

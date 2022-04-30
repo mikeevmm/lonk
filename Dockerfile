@@ -19,7 +19,7 @@ RUN rm ./target/${PROFILE:-release}/deps/lonk*
 RUN cargo build
 
 # Execution container
-FROM rust:latest
+FROM rust:slim
 WORKDIR /
 ARG PROFILE
 COPY --from=builder /lonk/target/${PROFILE:-release}/lonk /bin/lonk
