@@ -2,6 +2,18 @@
 
 A very simple link shortener, written in Rust, made to self host.
 
+## What is lonk
+
+Lonk provides an HTTP interface where you input a URL, and get a short, standardized URL
+(`.../l/` plus a sequence of letters and numbers) that will redirect you to the provided
+URL.
+
+Such link shorteners can be useful to share links where copy-pasting is not an option, or
+undesirable.
+
+By default, links shortened with lonk expire after 3 days; this period can be refreshed by
+resubmitting the URL, without changing the shortened URL. 
+
 ## Serving lonk
 
 `lonk` can be served with `docker-compose` (recommended) or as a binary.
