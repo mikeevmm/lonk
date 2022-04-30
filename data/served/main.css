@@ -1,0 +1,56 @@
+body {
+    background-color: #0b0b0e;
+
+    width: 100vw;
+    min-height: 100vh;
+    height: 1px;
+
+    box-sizing: border-box;
+    padding-top: 5vh;
+    padding-bottom: 5vh;
+
+    display: flex;
+    flex-flow: column nowrap;
+    align-items: center;
+    justify-content: space-between;
+}
+
+#form {
+    width: 95%;
+}
+
+#form > input {
+    width: 100%;
+
+    background-color: transparent;
+    color: #ffab3e;
+    text-align: center;
+    font-family: monospace;
+
+    border: none;
+    border-bottom: #15151b;
+}
+
+#shortened {
+    font-size: calc(min(20pt, 10vw));
+    font-family: monospace;
+    color: #385d22;
+    text-align: center;
+}
+
+#info {
+    font-family: monospace;
+    color: rgb(91, 91, 91);
+    text-align: center;
+}
+
+#info[state="hidden"] {
+    display: none;
+}
+#info[state~="hidden"] {
+    display: block;
+}
+
+#info[state="error"] {
+    color: rgb(142, 49, 33);
+}

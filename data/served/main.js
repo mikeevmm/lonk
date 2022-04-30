@@ -2,19 +2,21 @@
 
 (() => {
     document.addEventListener('DOMContentLoaded', (_) => {
-        const waiting = false;
+        let waiting = false;
         let xhr;
 
+        const shortened = document.getElementById('shortened');
+        const info = document.getElementById('info');
         const field = document.getElementById('url');
-
-        field.addEventListener('change', () => {
-            if (waiting && xhr != null) {
-                xhr.abort();
-            }
-        });
-        
         const form = document.getElementById('form');
 
+        // Select the full link with one click
+        shortened.onclick = () => {
+            this.focus();
+            this.select();
+        };
+
+        // Set up the actual submission
         form.addEventListener('submit', (event) => {
             // We need to create a different body, so prevent the default submission.
             event.preventDefault();
@@ -25,7 +27,12 @@
             }
 
             // Get the URL the user is trying to shorten.
-            const url = document.getElementById('url').value;
+            let url = document.getElementById('url').value;
+
+            // If it doesn't have a protocol, assume https.
+            if (!/^\w+:\/\/.*$/.test(url)) {
+                url = 'https://' + url;
+            }
 
             // Encode the URL as Base64.
             const encoded = btoa(encodeURIComponent(url).replace(/%([0-9A-F]{2})/g, (match, p1) =>
@@ -38,18 +45,33 @@
             xhr.overrideMimeType('text/plain');
             xhr.send(encoded);
             xhr.onload = () => {
+                waiting = false;
                 switch (xhr.status) {
                     case 200:
                         let slug = xhr.response;
-                        console.log(slug);
-                    break;
+                        const short_link = `${window.location.href}l/${slug}`;
+
+                        // Display to the user
+
+                        shortened.innerText = short_link;
+
+                        info.setAttribute('state', 'info');
+                        info.innerText = 'Link successfully shortened and copied to your clipboard.';
+
+                        // Copy the link to the clipboard
+
+                        navigator.clipboard.writeText(short_link);
+                        break;
                     default:
-                        console.log(xhr.response);
-                    break;
+                        info.setAttribute('state', 'error');
+                        info.innerText = xhr.response;
+                        break;
                 }
             };
             xhr.onerror = () => {
-                // TODO
+                waiting = false;
+                info.setAttribute('state', 'error');
+                info.innerText = "Failed to shorten the URL. Please try again.";
             };
         });
     });

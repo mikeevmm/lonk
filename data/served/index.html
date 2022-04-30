@@ -6,6 +6,7 @@
     <meta http-equiv='X-UA-Compatible' content='IE=edge'>
     <title>Lonk</title>
     <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <link rel='stylesheet' type='text/css' media='screen' href='reset.min.css'>
     <link rel='stylesheet' type='text/css' media='screen' href='main.css'>
     <script src="main.js"></script>
 </head>
@@ -19,12 +20,12 @@
          be browsing the web with Javascript blocked, then
          just do a POST request to /shorten with the URL you
          wish to shorten Base64-encoded as the body. -->
-    <form id="form">
-        <input type="url" name="url" id="url" required>
+    <form id="form" novalidate>
+        <input type="url" name="url" id="url" autocomplete="off" required autofocus>
         <input type="submit" hidden />
     </form>
 
-    <p id="info"></p>
+    <p id="info" state="hidden"></p>
 </body>
 
 </html>
