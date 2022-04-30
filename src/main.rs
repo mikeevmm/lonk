@@ -223,7 +223,7 @@ mod service {
     use validators::prelude::*;
 
     #[derive(Validator)]
-    #[validator(http_url(local(Allow)))]
+    #[validator(http_url(local(NotAllow)))]
     #[derive(Clone, Debug)]
     /// A struct representing a URL.
     pub struct HttpUrl {
@@ -234,6 +234,24 @@ mod service {
     impl std::fmt::Display for HttpUrl {
         fn fmt(&self, f: &mut validators_prelude::Formatter<'_>) -> std::fmt::Result {
             self.url.fmt(f)
+        }
+    }
+
+    impl HttpUrl {
+        /// Transform this into an `Err(())` if the url does not match more
+        /// criteria.
+        pub fn strict(self) -> Result<Self, ()> {
+            // Don't even bother with URLs that don't have hosts.
+            if !self.url.has_host() {
+                return Err(());
+            }
+
+            // URLs that cannot be a base are weird (UNIX sockets, data types)
+            if self.url.cannot_be_a_base() {
+                return Err(())
+            }
+
+            Ok(self)
         }
     }
 
@@ -679,7 +697,9 @@ async fn shorten(
                 .into(),
             )
         })?;
-        HttpUrl::parse_str(url_str)
+        HttpUrl::parse_string(url_str)
+            .map_err(|_| (warp::http::StatusCode::BAD_REQUEST, "Invalid URL.".into()))?
+            .strict()
             .map_err(|_| (warp::http::StatusCode::BAD_REQUEST, "Invalid URL.".into()))?
     };
 
