@@ -437,11 +437,13 @@ mod service {
             ) {
                 let url_str = url.to_string();
                 let url_key = format!("url:{}", url_str);
-                let slug_key = format!("slug:{}", requested_slug.inner_str());
+
                 // Check that the URL is not already present in the DB
                 // This is, to some extent, a protection against collision attacks.
                 match connection.get::<String, Option<String>>(url_key.clone()) {
                     Ok(Some(slug)) => {
+                        let slug_key = format!("slug:{}", slug);
+
                         // The URL was already present.
                         // Refresh the expiration.
                         // (If this operation fails it cannot be corrected for.)
@@ -467,6 +469,35 @@ mod service {
                 };
 
                 // The URL is not present in the database; insert it.
+
+                let slug_key = format!("slug:{}", requested_slug.inner_str());
+
+                // Make sure that there's no collision with the slug; if so, we
+                // are in one of two situations: either we got really unlucky,
+                // or the slug space has been exhausted.
+                // In any case, to be safe, fail the operation.
+                match connection.get::<String, Option<String>>(slug_key.clone()) {
+                    Ok(Some(_)) => {
+                        // Collision!
+                        response_channel.send(AddResult::Fail).ok();
+                        eprintln!(
+                            "Collision for slug {}! 
+                            Slug space may have been exhausted.
+                            If you see this message repeatedly,
+                            consider increasing the slug size.",
+                            slug_key
+                        );
+                        return;
+                    }
+                    Err(err) => {
+                        // Internal error in communication.
+                        response_channel.send(AddResult::Fail).ok();
+                        ifdbg!(eprintln!("{}", err));
+                        return;
+                    }
+                    Ok(None) => {} // continue with insertion
+                };
+
                 let add_result = connection.set_ex::<String, String, ()>(
                     slug_key,
                     url_str.clone(),
