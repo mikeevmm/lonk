@@ -15,7 +15,7 @@ RUN rm src/*.rs
 
 # Compile the source
 COPY ./src ./src
-RUN rm ./target/${PROFILE:-release}/deps/lonk*
+RUN rm -f ./target/${PROFILE:-release}/deps/lonk*
 RUN cargo build
 
 # Execution container
