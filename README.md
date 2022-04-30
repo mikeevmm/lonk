@@ -72,7 +72,7 @@ as in the `docker-compose` case, namely by creating the appropriate `config.json
 for a starting point, run `lonk --print-default-config`:
 
 ```
-root# sudo -i lonk /bin/bash
+root# sudo -u lonk /bin/bash
 lonk$ mkdir /etc/lonk/served
 lonk$ /etc/lonk/lonk --print-default-config > etc/lonk/lonk.json
 ```
@@ -93,7 +93,7 @@ Finally, serve `lonk` (in the location specified in the configuration file):
 
 ```
 lonk$ logout
-root# sudo -i lonk /etc/lonk/lonk
+root# sudo -u lonk /etc/lonk/lonk
 ```
 
 ## Contributing
