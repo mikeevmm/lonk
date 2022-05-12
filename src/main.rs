@@ -145,12 +145,44 @@ mod conf {
     /// example). See the definition of each of the member structs for more
     /// information.
     pub struct Config {
+        /// The "version" of the configuration, corresponding to the MAJOR in
+        /// semantic versioning. Should be increased every time the
+        /// configuration structure suffers breaking changes.
+        /// This value is optional because sufficiently old configuration files
+        /// may not have a version field.
+        pub version: Option<usize>,
         /// Configuration regarding the Redis database.
         pub db: DbConfig,
         /// Configuration regarding the types of (URL shorten) slugs produced.
         pub slug_rules: SlugRules,
         /// Configuration regarding where and how the HTTP server is served.
         pub serve_rules: ServeRules,
+    }
+
+    /// Get the configuration version field that this version of lonk expects.
+    pub fn config_version() -> usize {
+        usize::from_str(env!("CARGO_PKG_VERSION_MAJOR")).unwrap()
+    }
+
+    pub enum ConfigParseError {
+        SerdeError(serde_json::error::Error),
+        OldVersion(usize),
+    }
+
+    impl Config {
+        pub fn from_sync_buffer<R: std::io::Read>(
+            buffer: std::io::BufReader<R>,
+        ) -> Result<Self, ConfigParseError> {
+            let parsed: Config =
+                serde_json::from_reader(buffer).map_err(|err| ConfigParseError::SerdeError(err))?;
+
+            let parsed_version = parsed.version.unwrap_or(0);
+            if parsed_version != config_version() {
+                return Err(ConfigParseError::OldVersion(parsed_version));
+            }
+
+            Ok(parsed)
+        }
     }
 
     // Default implementations
@@ -210,6 +242,7 @@ mod conf {
     impl Default for Config {
         fn default() -> Self {
             Self {
+                version: Some(config_version()),
                 db: Default::default(),
                 slug_rules: Default::default(),
                 serve_rules: Default::default(),
@@ -824,27 +857,45 @@ async fn serve() {
                 ),
             };
         });
-        let config_buf = std::io::BufReader::new(config_file);
-        serde_json::from_reader(config_buf).unwrap_or_else(|err| match err.classify() {
-            serde_json::error::Category::Io => panic!("IO error when reading configuration file."),
-            serde_json::error::Category::Syntax => panic!(
-                "Configuration file is syntactically incorrect.
-                    See {}:line {}, column {}.",
-                &config_file_name,
-                err.line(),
-                err.column()
-            ),
-            serde_json::error::Category::Data => panic!(
-                "Error deserializing configuration file; expected different data type.
-                    See {}:line {}, column {}.",
-                &config_file_name,
-                err.line(),
-                err.column()
-            ),
-            serde_json::error::Category::Eof => {
-                panic!("Unexpected end of file when reading configuration file.")
-            }
+        let parse_result = tokio::task::spawn_blocking(move || {
+            conf::Config::from_sync_buffer(std::io::BufReader::new(config_file))
         })
+        .await
+        .expect("Tokio error from blocking task.");
+
+        match parse_result {
+            Err(conf::ConfigParseError::SerdeError(err)) => match err.classify() {
+                serde_json::error::Category::Io => {
+                    panic!("IO error when reading configuration file.")
+                }
+                serde_json::error::Category::Syntax => panic!(
+                    "Configuration file is syntactically incorrect.
+                            See {}:line {}, column {}.",
+                    &config_file_name,
+                    err.line(),
+                    err.column()
+                ),
+                serde_json::error::Category::Data => panic!(
+                    "Error deserializing configuration file; expected different data type.
+                            See {}:line {}, column {}.",
+                    &config_file_name,
+                    err.line(),
+                    err.column()
+                ),
+                serde_json::error::Category::Eof => {
+                    panic!("Unexpected end of file when reading configuration file.")
+                }
+            },
+            Err(conf::ConfigParseError::OldVersion(old_version)) => {
+                panic!(
+                    "Configuration file has outdated version.
+                        Expected version field to be {} but got {}.",
+                    old_version,
+                    conf::config_version()
+                );
+            }
+            Ok(config) => config,
+        }
     };
 
     // Create slug factory
@@ -934,7 +985,8 @@ fn main() {
             serde_json::to_string_pretty(&conf::Config::default())
                 .expect("Default configuration should always be JSON serializable")
         );
-    } else {
-        serve();
+        std::process::exit(0);
     }
+
+    serve();
 }
