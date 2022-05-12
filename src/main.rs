@@ -139,6 +139,15 @@ mod conf {
     }
 
     #[derive(Deserialize, Serialize, Debug, Clone)]
+    /// Configuration of logging by lonk.
+    pub struct LogRules {
+        /// Where to write error logs to. The file will be appended to.
+        error_log_file: PathBuf,
+        /// Where to write access ogs to. The file will be appended to.
+        access_log_file: PathBuf,
+    }
+
+    #[derive(Deserialize, Serialize, Debug, Clone)]
     /// Configuration struct. This struct is a typed representation of the
     /// configuration file, with each of the domain-specific configurations
     /// defined as their own type (in reflection of a JSON structure, for
@@ -153,6 +162,8 @@ mod conf {
         pub version: Option<usize>,
         /// Configuration regarding the Redis database.
         pub db: DbConfig,
+        /// Configuration regarding logging.
+        pub log_rules: LogRules,
         /// Configuration regarding the types of (URL shorten) slugs produced.
         pub slug_rules: SlugRules,
         /// Configuration regarding where and how the HTTP server is served.
@@ -171,6 +182,10 @@ mod conf {
         ServeFileNotExists(PathBuf),
         ServeDirNotDir(PathBuf),
         ServeDirNotExists(PathBuf),
+        BadAccessLogPath,
+        BadErrorLogPath,
+        AccessLogDirectoryNotExists(PathBuf),
+        ErrorLogDirectoryNotExists(PathBuf),
     }
 
     impl Config {
@@ -207,6 +222,34 @@ mod conf {
                     if !dir.is_dir() {
                         return Err(ConfigParseError::ServeDirNotDir(dir.clone()));
                     }
+                }
+            }
+
+            // Check access and error log parent directories
+            // - Access log file
+            let canonical = self
+                .log_rules
+                .access_log_file
+                .canonicalize()
+                .map_err(|_| ConfigParseError::BadAccessLogPath)?;
+            if let Some(parent) = canonical.parent() {
+                if !parent.exists() {
+                    return Err(ConfigParseError::AccessLogDirectoryNotExists(
+                        parent.to_path_buf(),
+                    ));
+                }
+            }
+            // - Error log file
+            let canonical = self
+                .log_rules
+                .error_log_file
+                .canonicalize()
+                .map_err(|_| ConfigParseError::BadErrorLogPath)?;
+            if let Some(parent) = canonical.parent() {
+                if !parent.exists() {
+                    return Err(ConfigParseError::ErrorLogDirectoryNotExists(
+                        parent.to_path_buf(),
+                    ));
                 }
             }
 
@@ -271,6 +314,18 @@ mod conf {
                     file.to_string_lossy()
                 )
                 }
+                ConfigParseError::BadAccessLogPath => {
+                    panic!("Access log path could not be parsed as a canonicalizable path.")
+                }
+                ConfigParseError::BadErrorLogPath => {
+                    panic!("Error log path could not be parsed as a canonicalizable path.")
+                }
+                ConfigParseError::AccessLogDirectoryNotExists(dir) => {
+                    panic!("Access log file should have parent directory {}, but this directory does not exist.", dir.to_string_lossy())
+                }
+                ConfigParseError::ErrorLogDirectoryNotExists(dir) => {
+                    panic!("Error log file should have parent directory {}, but this directory does not exist.", dir.to_string_lossy())
+                }
             }
         }
     }
@@ -329,6 +384,15 @@ mod conf {
         }
     }
 
+    impl Default for LogRules {
+        fn default() -> Self {
+            Self {
+                error_log_file: "/etc/lonk/log/error.log".into(),
+                access_log_file: "/etc/lonk/log/access.log".into(),
+            }
+        }
+    }
+
     impl Default for Config {
         fn default() -> Self {
             Self {
@@ -336,6 +400,7 @@ mod conf {
                 db: Default::default(),
                 slug_rules: Default::default(),
                 serve_rules: Default::default(),
+                log_rules: Default::default(),
             }
         }
     }
