@@ -225,6 +225,7 @@ mod service {
     #[derive(Validator)]
     #[validator(http_url(local(NotAllow)))]
     #[derive(Clone, Debug)]
+    #[allow(dead_code)]
     /// A struct representing a URL.
     pub struct HttpUrl {
         url: validators::url::Url,
@@ -233,6 +234,7 @@ mod service {
 
     #[derive(Validator)]
     #[validator(domain(ipv4(Allow), local(NotAllow), at_least_two_labels(Must), port(Allow)))]
+    #[allow(dead_code)]
     pub struct Domain {
         domain: String,
         port: Option<u16>,
