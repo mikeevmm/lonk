@@ -971,13 +971,23 @@ async fn serve() {
 #[derive(FromArgs, PartialEq, Debug)]
 /// Start lonk.
 struct Run {
+    /// print the version and quit
+    #[argh(switch)]
+    version: bool,
     /// write a default configuration to stdout and quit
     #[argh(switch)]
     print_default_config: bool,
 }
 
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
 fn main() {
     let run = argh::from_env::<Run>();
+
+    if run.version {
+        println!("lonk v{}", VERSION);
+        std::process::exit(0);
+    }
 
     if run.print_default_config {
         println!(
