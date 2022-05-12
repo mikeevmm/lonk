@@ -262,16 +262,16 @@ mod conf {
             match self {
                 ConfigParseError::SerdeError(err) => match err.classify() {
                     serde_json::error::Category::Io => {
-                        panic!("IO error when reading configuration file.")
+                        eprintln!("IO error when reading configuration file.")
                     }
-                    serde_json::error::Category::Syntax => panic!(
+                    serde_json::error::Category::Syntax => eprintln!(
                         "Configuration file is syntactically incorrect.
                             See {}:{}:{}.",
                         config_file_name,
                         err.line(),
                         err.column()
                     ),
-                    serde_json::error::Category::Data => panic!(
+                    serde_json::error::Category::Data => eprintln!(
                         "Error deserializing configuration file; expected different data type.
                             See {}:{}:{}.",
                         config_file_name,
@@ -279,11 +279,11 @@ mod conf {
                         err.column()
                     ),
                     serde_json::error::Category::Eof => {
-                        panic!("Unexpected end of file when reading configuration file.")
+                        eprintln!("Unexpected end of file when reading configuration file.")
                     }
                 },
                 ConfigParseError::OldVersion(old_version) => {
-                    panic!(
+                    eprintln!(
                         "Configuration file has outdated version.
                         Expected version field to be {} but got {}.",
                         old_version,
@@ -291,42 +291,43 @@ mod conf {
                     );
                 }
                 ConfigParseError::ServeDirNotExists(dir) => {
-                    panic!(
+                    eprintln!(
                     "Configuration file indicates directory {} should be served, but it does not exist.",
                     dir.to_string_lossy()
                 )
                 }
                 ConfigParseError::ServeDirNotDir(dir) => {
-                    panic!(
+                    eprintln!(
                     "Configuration file indicates directory {} should be served, but it is not a directory.",
                     dir.to_string_lossy()
                 )
                 }
                 ConfigParseError::ServeFileNotExists(file) => {
-                    panic!(
+                    eprintln!(
                     "Configuration file indicates file {} should be served, but it does not exist.",
                     file.to_string_lossy()
                 )
                 }
                 ConfigParseError::ServeFileNotFile(file) => {
-                    panic!(
+                    eprintln!(
                     "Configuration file indicates file {} should be served, but it is not a file.",
                     file.to_string_lossy()
                 )
                 }
                 ConfigParseError::BadAccessLogPath => {
-                    panic!("Access log path could not be parsed as a canonicalizable path.")
+                    eprintln!("Access log path could not be parsed as a canonicalizable path.")
                 }
                 ConfigParseError::BadErrorLogPath => {
-                    panic!("Error log path could not be parsed as a canonicalizable path.")
+                    eprintln!("Error log path could not be parsed as a canonicalizable path.")
                 }
                 ConfigParseError::AccessLogDirectoryNotExists(dir) => {
-                    panic!("Access log file should have parent directory {}, but this directory does not exist.", dir.to_string_lossy())
+                    eprintln!("Access log file should have parent directory {}, but this directory does not exist.", dir.to_string_lossy())
                 }
                 ConfigParseError::ErrorLogDirectoryNotExists(dir) => {
-                    panic!("Error log file should have parent directory {}, but this directory does not exist.", dir.to_string_lossy())
+                    eprintln!("Error log file should have parent directory {}, but this directory does not exist.", dir.to_string_lossy())
                 }
             }
+            std::process::exit(1);
         }
     }
 
@@ -1001,16 +1002,17 @@ async fn serve() {
         let config_file = std::fs::File::open(config_file_name.clone()).unwrap_or_else(|err| {
             match err.kind() {
                 std::io::ErrorKind::NotFound => {
-                    panic!("Configuration file {} does not exist.", config_file_name)
+                    eprintln!("Configuration file {} does not exist.", config_file_name)
                 }
                 std::io::ErrorKind::PermissionDenied => {
-                    panic!("Read permission to {} was denied.", config_file_name)
+                    eprintln!("Read permission to {} was denied.", config_file_name)
                 }
-                _ => panic!(
+                _ => eprintln!(
                     "Error when trying to read configuration file {}: {}",
                     config_file_name, err
                 ),
             };
+            std::process::exit(1);
         });
         let parse_result = tokio::task::spawn_blocking(move || {
             conf::Config::from_sync_buffer(std::io::BufReader::new(config_file))
