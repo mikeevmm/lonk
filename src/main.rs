@@ -167,6 +167,10 @@ mod conf {
     pub enum ConfigParseError {
         SerdeError(serde_json::error::Error),
         OldVersion(usize),
+        ServeFileNotFile(PathBuf),
+        ServeFileNotExists(PathBuf),
+        ServeDirNotDir(PathBuf),
+        ServeDirNotExists(PathBuf),
     }
 
     impl Config {
@@ -175,13 +179,99 @@ mod conf {
         ) -> Result<Self, ConfigParseError> {
             let parsed: Config =
                 serde_json::from_reader(buffer).map_err(|err| ConfigParseError::SerdeError(err))?;
+            parsed.validate()
+        }
 
-            let parsed_version = parsed.version.unwrap_or(0);
+        fn validate(self) -> Result<Self, ConfigParseError> {
+            // Check configuration version
+            let parsed_version = self.version.unwrap_or(0);
             if parsed_version != config_version() {
                 return Err(ConfigParseError::OldVersion(parsed_version));
             }
 
-            Ok(parsed)
+            // Check existence of serve file or directory
+            match &self.serve_rules.dir {
+                ServeDirRules::File(file) => {
+                    if !file.exists() {
+                        return Err(ConfigParseError::ServeFileNotExists(file.clone()));
+                    }
+                    if !file.is_file() {
+                        return Err(ConfigParseError::ServeFileNotFile(file.clone()));
+                    }
+                }
+                ServeDirRules::Dir(dir) => {
+                    if !dir.exists() {
+                        return Err(ConfigParseError::ServeDirNotExists(dir.clone()));
+                    }
+
+                    if !dir.is_dir() {
+                        return Err(ConfigParseError::ServeDirNotDir(dir.clone()));
+                    }
+                }
+            }
+
+            Ok(self)
+        }
+    }
+
+    impl ConfigParseError {
+        pub fn panic_with_message(self, config_file_name: &str) -> ! {
+            match self {
+                ConfigParseError::SerdeError(err) => match err.classify() {
+                    serde_json::error::Category::Io => {
+                        panic!("IO error when reading configuration file.")
+                    }
+                    serde_json::error::Category::Syntax => panic!(
+                        "Configuration file is syntactically incorrect.
+                            See {}:line {}, column {}.",
+                        config_file_name,
+                        err.line(),
+                        err.column()
+                    ),
+                    serde_json::error::Category::Data => panic!(
+                        "Error deserializing configuration file; expected different data type.
+                            See {}:line {}, column {}.",
+                        config_file_name,
+                        err.line(),
+                        err.column()
+                    ),
+                    serde_json::error::Category::Eof => {
+                        panic!("Unexpected end of file when reading configuration file.")
+                    }
+                },
+                ConfigParseError::OldVersion(old_version) => {
+                    panic!(
+                        "Configuration file has outdated version.
+                        Expected version field to be {} but got {}.",
+                        old_version,
+                        config_version()
+                    );
+                }
+                ConfigParseError::ServeDirNotExists(dir) => {
+                    panic!(
+                    "Configuration file indicates directory {} should be served, but it does not exist.",
+                    dir.to_string_lossy()
+                )
+                }
+                ConfigParseError::ServeDirNotDir(dir) => {
+                    panic!(
+                    "Configuration file indicates directory {} should be served, but it is not a directory.",
+                    dir.to_string_lossy()
+                )
+                }
+                ConfigParseError::ServeFileNotExists(file) => {
+                    panic!(
+                    "Configuration file indicates file {} should be served, but it does not exist.",
+                    file.to_string_lossy()
+                )
+                }
+                ConfigParseError::ServeFileNotFile(file) => {
+                    panic!(
+                    "Configuration file indicates file {} should be served, but it is not a file.",
+                    file.to_string_lossy()
+                )
+                }
+            }
         }
     }
 
@@ -217,7 +307,7 @@ mod conf {
 
     impl Default for ServeDirRules {
         fn default() -> Self {
-            ServeDirRules::Dir(PathBuf::from_str("/etc/lonk/served").unwrap())
+            ServeDirRules::Dir("/etc/lonk/served".into())
         }
     }
 
@@ -864,36 +954,7 @@ async fn serve() {
         .expect("Tokio error from blocking task.");
 
         match parse_result {
-            Err(conf::ConfigParseError::SerdeError(err)) => match err.classify() {
-                serde_json::error::Category::Io => {
-                    panic!("IO error when reading configuration file.")
-                }
-                serde_json::error::Category::Syntax => panic!(
-                    "Configuration file is syntactically incorrect.
-                            See {}:line {}, column {}.",
-                    &config_file_name,
-                    err.line(),
-                    err.column()
-                ),
-                serde_json::error::Category::Data => panic!(
-                    "Error deserializing configuration file; expected different data type.
-                            See {}:line {}, column {}.",
-                    &config_file_name,
-                    err.line(),
-                    err.column()
-                ),
-                serde_json::error::Category::Eof => {
-                    panic!("Unexpected end of file when reading configuration file.")
-                }
-            },
-            Err(conf::ConfigParseError::OldVersion(old_version)) => {
-                panic!(
-                    "Configuration file has outdated version.
-                        Expected version field to be {} but got {}.",
-                    old_version,
-                    conf::config_version()
-                );
-            }
+            Err(err) => err.panic_with_message(&config_file_name),
             Ok(config) => config,
         }
     };
