@@ -266,14 +266,14 @@ mod conf {
                     }
                     serde_json::error::Category::Syntax => panic!(
                         "Configuration file is syntactically incorrect.
-                            See {}:line {}, column {}.",
+                            See {}:{}:{}.",
                         config_file_name,
                         err.line(),
                         err.column()
                     ),
                     serde_json::error::Category::Data => panic!(
                         "Error deserializing configuration file; expected different data type.
-                            See {}:line {}, column {}.",
+                            See {}:{}:{}.",
                         config_file_name,
                         err.line(),
                         err.column()
