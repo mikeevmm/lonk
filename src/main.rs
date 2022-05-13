@@ -182,8 +182,6 @@ mod conf {
         ServeFileNotExists(PathBuf),
         ServeDirNotDir(PathBuf),
         ServeDirNotExists(PathBuf),
-        BadAccessLogPath,
-        BadErrorLogPath,
         AccessLogDirectoryNotExists(PathBuf),
         ErrorLogDirectoryNotExists(PathBuf),
     }
@@ -227,12 +225,8 @@ mod conf {
 
             // Check access and error log parent directories
             // - Access log file
-            let canonical = self
-                .log_rules
-                .access_log_file
-                .canonicalize()
-                .map_err(|_| ConfigParseError::BadAccessLogPath)?;
-            if let Some(parent) = canonical.parent() {
+            let weak_canonical = normalize_path(&self.log_rules.access_log_file);
+            if let Some(parent) = weak_canonical.parent() {
                 if !parent.exists() {
                     return Err(ConfigParseError::AccessLogDirectoryNotExists(
                         parent.to_path_buf(),
@@ -240,12 +234,8 @@ mod conf {
                 }
             }
             // - Error log file
-            let canonical = self
-                .log_rules
-                .error_log_file
-                .canonicalize()
-                .map_err(|_| ConfigParseError::BadErrorLogPath)?;
-            if let Some(parent) = canonical.parent() {
+            let weak_canonical = normalize_path(&self.log_rules.error_log_file);
+            if let Some(parent) = weak_canonical.parent() {
                 if !parent.exists() {
                     return Err(ConfigParseError::ErrorLogDirectoryNotExists(
                         parent.to_path_buf(),
@@ -255,6 +245,37 @@ mod conf {
 
             Ok(self)
         }
+    }
+
+    /// Yanked from the source of cargo. Weaker than canonicalize, because it
+    /// doesn't require the target file to exist.
+    fn normalize_path(path: &std::path::Path) -> PathBuf {
+        use std::path::*;
+
+        let mut components = path.components().peekable();
+        let mut ret = if let Some(c @ Component::Prefix(..)) = components.peek().cloned() {
+            components.next();
+            PathBuf::from(c.as_os_str())
+        } else {
+            PathBuf::new()
+        };
+
+        for component in components {
+            match component {
+                Component::Prefix(..) => unreachable!(),
+                Component::RootDir => {
+                    ret.push(component.as_os_str());
+                }
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    ret.pop();
+                }
+                Component::Normal(c) => {
+                    ret.push(c);
+                }
+            }
+        }
+        ret
     }
 
     impl ConfigParseError {
@@ -315,12 +336,6 @@ mod conf {
                     "Configuration file indicates file {} should be served, but it is not a file.",
                     file.to_string_lossy()
                 )
-                }
-                ConfigParseError::BadAccessLogPath => {
-                    eprintln!("Access log path could not be parsed as a canonicalizable path.")
-                }
-                ConfigParseError::BadErrorLogPath => {
-                    eprintln!("Error log path could not be parsed as a canonicalizable path.")
                 }
                 ConfigParseError::AccessLogDirectoryNotExists(dir) => {
                     eprintln!("Access log file should have parent directory {}, but this directory does not exist.", dir.to_string_lossy())
@@ -943,7 +958,7 @@ mod service {
             /// should decide either to stop logging, ignore these errors, or
             /// halt the program.
             pub fn access(&self, msg: String) -> Result<(), ()> {
-                self.access_tx.send(msg).map_err(|e| ())
+                self.access_tx.send(msg).map_err(|_| ())
             }
 
             /// Log a message into the error log file.
@@ -953,7 +968,7 @@ mod service {
             /// should decide either to stop logging, ignore these errors, or
             /// halt the program.
             pub fn error(&self, msg: String) -> Result<(), ()> {
-                self.error_tx.send(msg).map_err(|e| ())
+                self.error_tx.send(msg).map_err(|_| ())
             }
 
             /// The task responsible for receiving the log messages and actually
@@ -961,7 +976,11 @@ mod service {
             /// for each target file.
             async fn logging_task(mut rx: sync::mpsc::UnboundedReceiver<String>, into: PathBuf) {
                 // Open the log file in append mode
-                let file = OpenOptions::new().append(true).open(into.clone()).await;
+                let file = OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(into.clone())
+                    .await;
                 if let Err(e) = file {
                     eprintln!(
                         concat!(
@@ -974,11 +993,11 @@ mod service {
                     );
                     return;
                 }
-                let mut file = BufWriter::new(file.unwrap());
+                let mut file = file.unwrap();
 
                 // Listen to the logging message channel
                 while let Some(log) = rx.recv().await {
-                    let write_result = file.write(log.as_bytes()).await;
+                    let write_result = file.write_buf(&mut log.as_bytes()).await;
                     if let Err(e) = write_result {
                         eprintln!(
                             concat!(
@@ -1150,12 +1169,12 @@ async fn serve() {
     // Warp logging compatibility layer
     let log = warp::log::custom(move |info| {
         let log_msg = format!(
-            "{} requested {}/{}, replied with status {}",
+            "{} {} {}, replied with status {}\n",
             info.remote_addr()
                 .map(|x| x.to_string())
                 .unwrap_or_else(|| "".to_string()),
-            info.path(),
             info.method(),
+            info.path(),
             info.status().as_u16(),
         );
         if info.status().is_client_error() || info.status().is_server_error() {
