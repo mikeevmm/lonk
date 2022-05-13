@@ -265,15 +265,17 @@ mod conf {
                         eprintln!("IO error when reading configuration file.")
                     }
                     serde_json::error::Category::Syntax => eprintln!(
-                        "Configuration file is syntactically incorrect.
-                            See {}:{}:{}.",
+                        concat!(
+                            "Configuration file is syntactically incorrect.\n",
+                            "See {}:{}:{}."
+                        ),
                         config_file_name,
                         err.line(),
                         err.column()
                     ),
                     serde_json::error::Category::Data => eprintln!(
-                        "Error deserializing configuration file; expected different data type.
-                            See {}:{}:{}.",
+                        concat!("Error deserializing configuration file; expected different data type.\n",
+                            "See {}:{}:{}."),
                         config_file_name,
                         err.line(),
                         err.column()
@@ -284,8 +286,8 @@ mod conf {
                 },
                 ConfigParseError::OldVersion(old_version) => {
                     eprintln!(
-                        "Configuration file has outdated version.
-                        Expected version field to be {} but got {}.",
+                        concat!("Configuration file has outdated version.\n",
+                        "Expected version field to be {} but got {}."),
                         old_version,
                         config_version()
                     );
@@ -672,10 +674,12 @@ mod service {
                         // Collision!
                         response_channel.send(AddResult::Fail).ok();
                         eprintln!(
-                            "Collision for slug {}! 
-                            Slug space may have been exhausted.
-                            If you see this message repeatedly,
-                            consider increasing the slug size.",
+                            concat!(
+                                "Collision for slug {}!\n",
+                                "Slug space may have been exhausted.\n",
+                                "If you see this message repeatedly,",
+                                "consider increasing the slug size."
+                            ),
                             slug_key
                         );
                         return;
