@@ -997,7 +997,19 @@ mod service {
 
                 // Listen to the logging message channel
                 while let Some(log) = rx.recv().await {
-                    let write_result = file.write_buf(&mut log.as_bytes()).await;
+                    let write_result = file
+                        .write_buf(
+                            &mut format!(
+                                "{} ",
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .expect("Bad system time")
+                                    .as_secs()
+                            )
+                            .as_bytes(),
+                        )
+                        .await
+                        .and(file.write_buf(&mut log.as_bytes()).await);
                     if let Err(e) = write_result {
                         eprintln!(
                             concat!(
@@ -1024,6 +1036,7 @@ async fn shorten(
     slug_factory: &slug::SlugFactory,
     db: &db::SlugDatabase,
     b64str: &str,
+    logger: &log::Logger,
 ) -> Result<slug::Slug, (StatusCode, String)> {
     // Parse the URL given by the user. It should arrive as a Base64 string,
     // and anything other than this should cleanly result in an HTTP rejection.
@@ -1055,10 +1068,15 @@ async fn shorten(
 
     // ...and attempt to insert it into the database.
     // Failure to do so is reported to the user.
-    let insert_result = db.insert_slug(new_slug, url).await;
+    let insert_result = db.insert_slug(new_slug, url.clone()).await;
     match insert_result {
         Ok(result) => match result {
-            service::db::AddResult::Success(slug) => Ok(slug),
+            service::db::AddResult::Success(slug) => {
+                logger
+                    .access(format!("{} -> {}\n", slug.inner_str(), url))
+                    .ok();
+                Ok(slug)
+            }
             service::db::AddResult::Fail => Err((
                 warp::http::StatusCode::INTERNAL_SERVER_ERROR,
                 debuginfo!("Got insertion response, but it was error.").into(),
@@ -1169,10 +1187,12 @@ async fn serve() {
     // Warp logging compatibility layer
     let log = warp::log::custom(move |info| {
         let log_msg = format!(
-            "{} {} {}, replied with status {}\n",
+            "{} ({}) {} {}, replied with status {}\n",
             info.remote_addr()
                 .map(|x| x.to_string())
-                .unwrap_or_else(|| "".to_string()),
+                .unwrap_or_else(|| "<Unknown remote address>".to_string()),
+            info.user_agent()
+                .unwrap_or_else(|| "<No user agent provided>"),
             info.method(),
             info.path(),
             info.status().as_u16(),
@@ -1197,7 +1217,7 @@ async fn serve() {
                     .body(String::new())
                     .unwrap();
             }
-            match shorten(&slug_factory, &db, b64str.unwrap()).await {
+            match shorten(&slug_factory, &db, b64str.unwrap(), logger).await {
                 Ok(slug) => Response::builder()
                     .body(slug.inner_str().to_string())
                     .unwrap(),
