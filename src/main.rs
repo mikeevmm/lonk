@@ -1,5 +1,4 @@
 use argh::FromArgs;
-use core::panic;
 use validators::traits::ValidateString;
 use warp::{http::Response, hyper::StatusCode, Filter};
 
@@ -918,11 +917,7 @@ mod service {
     pub mod log {
         use std::path::PathBuf;
 
-        use tokio::{
-            fs::OpenOptions,
-            io::{AsyncWriteExt, BufWriter},
-            sync,
-        };
+        use tokio::{fs::OpenOptions, io::AsyncWriteExt, sync};
 
         /// A struct responsible for logging events, per messages received from
         /// other processes.
