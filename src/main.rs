@@ -1218,8 +1218,7 @@ async fn serve() {
                     .unwrap(),
                 Err((status, message)) => Response::builder().status(status).body(message).unwrap(),
             }
-        })
-        .with(log);
+        });
 
     // GET /l/:Slug
     let link = warp::path("l")
@@ -1233,19 +1232,17 @@ async fn serve() {
                     .unwrap(),
                 Err((status, message)) => Response::builder().status(status).body(message).unwrap(),
             }
-        })
-        .with(log);
+        });
 
     // GET /
     // This should be the last thing matched, so that anything that doesn't
     //  match another filter will try to match a file.
     let homepage = warp::get()
-        .and(config.serve_rules.dir.to_filter())
-        .with(log);
+        .and(config.serve_rules.dir.to_filter());
 
     let get_routes = warp::get().and(link.or(homepage));
     let post_routes = warp::post().and(shorten);
-    let routes = get_routes.or(post_routes);
+    let routes = get_routes.or(post_routes).with(log);
 
     eprintln!(
         "Now serving lonk at IP {}, port {}!",
